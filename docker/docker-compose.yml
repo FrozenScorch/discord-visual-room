@@ -1,0 +1,159 @@
+version: '3.8'
+
+# Docker Compose for Discord Visual Room - Production Deployment
+#
+# This configuration is designed for deployment on the production server (192.168.68.56)
+# using --network host mode as per project requirements.
+#
+# Network Mode: host
+# - All services communicate via localhost:PORT
+# - LLM Server: http://192.168.68.62:1234 (Windows PC)
+# - Backend WebSocket: localhost:8080
+# - Frontend HTTP: localhost:8000
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml up -d
+#   docker compose -f docker/docker-compose.yml down
+#   docker compose -f docker/docker-compose.yml logs -f [service]
+
+services:
+  # ========================================================================
+  # Backend Service - Scala/Akka WebSocket Server
+  # ------------------------------------------------------------------------
+  # - Multi-stage build for optimized production image
+  # - Exposes WebSocket on port 8080
+  # - Connects to LLM server at 192.168.68.62:1234
+  # ========================================================================
+  backend:
+    build:
+      context: ../backend/scala
+      dockerfile: ../../docker/backend/Dockerfile
+      cache_from:
+        - discord-visual-room-backend:latest
+    image: discord-visual-room-backend:latest
+    container_name: discord-visual-room-backend
+    restart: unless-stopped
+
+    # Network mode: host (required by deployment constraints)
+    # All service URLs use localhost:PORT not Docker service names
+    network_mode: host
+
+    environment:
+      # LLM Server Configuration (Windows PC)
+      - LLM_SERVER_URL=${LLM_SERVER_URL:-http://192.168.68.62:1234}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-30000}
+      - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-3}
+
+      # WebSocket Configuration
+      - WS_PORT=${WS_PORT:-8080}
+      - WS_HOST=${WS_HOST:-0.0.0.0}
+
+      # Discord Bot Configuration
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+
+      # Room Configuration
+      - ROOM_ID=${ROOM_ID:-default-room}
+      - ROOM_NAME=${ROOM_NAME:-Discord Visual Room}
+      - ROOM_MAX_USERS=${ROOM_MAX_USERS:-10}
+      - ROOM_WIDTH=${ROOM_WIDTH:-10}
+      - ROOM_HEIGHT=${ROOM_HEIGHT:-3}
+      - ROOM_DEPTH=${ROOM_DEPTH:-10}
+
+      # JVM Options
+      - JVM_OPTS=${JVM_OPTS:--Xmx512m -Xms128m}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+    # Health check for the backend WebSocket service
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ========================================================================
+  # Frontend Service - Three.js Visual Renderer
+  # ------------------------------------------------------------------------
+  # - Multi-stage build: Node.js build + nginx runtime
+  # - Serves static files on port 8000
+  # - nginx configured for SPA routing
+  # ========================================================================
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../../docker/frontend/Dockerfile
+      cache_from:
+        - discord-visual-room-frontend:latest
+      args:
+        - VITE_API_URL=${VITE_API_URL:-ws://localhost:8080}
+    image: discord-visual-room-frontend:latest
+    container_name: discord-visual-room-frontend
+    restart: unless-stopped
+
+    # Network mode: host (required by deployment constraints)
+    # Port mapping handled by host networking
+    # Container serves HTTP on port 80, mapped to 8000 on host via nginx config
+    network_mode: host
+
+    environment:
+      # Backend WebSocket URL (from host perspective)
+      - VITE_API_URL=${VITE_API_URL:-ws://localhost:8080}
+
+    # Health check for the frontend HTTP service
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ========================================================================
+# Volumes (if needed for future features)
+# ========================================================================
+volumes:
+  backend-logs:
+    driver: local
+
+# ========================================================================
+# Networks
+# ========================================================================
+# Note: Using host network mode as per deployment constraints.
+# No bridge networks defined as services communicate via localhost.
+# ========================================================================
+

@@ -1,0 +1,10 @@
+﻿{
+    "id":  "bfa3d835-c2df-46ba-9523-85424efdb83e",
+    "branch":  "feat/backend-scala-akka",
+    "task":  "Build the Scala backend with Akka Actors, Akka Streams, and discorde4j integration.\n\nKey Requirements:\n1. Akka Actor system for state management (Furniture, Positions, Users)\n2. Akka Streams for WebSocket communication\n3. discorde4j for Discord Voice Channel integration\n4. SceneGraph JSON generation and validation\n5. LLM client with graceful fallback to generateLinearLayout()\n\nLocation: Work in backend/scala directory\n\nCreate:\n- build.sbt with proper dependencies (Akka 2.8, discorde4j, HTTP client for LLM)\n- Main Actor hierarchy (RoomActor, UserManager, FurnitureManager)\n- WebSocket server for SceneGraph pushes\n- LLM client with timeout and validation\n- Fallback linear layout algorithm\n\nReference shared/types/src/index.ts for the SceneGraph schema to generate.",
+    "name":  "backend-scala-akka",
+    "status":  "active",
+    "parentBranch":  "main",
+    "path":  "C:\\Users\\Diego\\Downloads\\Others\\python random\\discord-visual-room\\..\\worktrees\\backend-scala-akka",
+    "createdAt":  "2026-02-01T19:19:16.8899244-05:00"
+}

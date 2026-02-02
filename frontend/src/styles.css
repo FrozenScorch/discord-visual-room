@@ -1,0 +1,239 @@
+/**
+ * Discord Visual Room - Main Styles
+ */
+
+/* Reset and base styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background-color: #1a1a2e;
+  color: #ffffff;
+}
+
+/* Header */
+header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 1rem 2rem;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.8), transparent);
+  pointer-events: none;
+}
+
+.header-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: auto;
+}
+
+h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* Connection status */
+.status {
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+}
+
+.status.connecting {
+  background-color: rgba(255, 193, 7, 0.9);
+  color: #000;
+}
+
+.status.connected {
+  background-color: rgba(76, 175, 80, 0.9);
+  color: #fff;
+}
+
+.status.connected.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.status.disconnected {
+  background-color: rgba(244, 67, 54, 0.9);
+  color: #fff;
+}
+
+.status.error {
+  background-color: rgba(211, 47, 47, 0.9);
+  color: #fff;
+}
+
+/* Main container */
+main {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+#canvas-container {
+  width: 100%;
+  height: 100%;
+}
+
+/* Loading overlay */
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(26, 26, 46, 0.95);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  transition: opacity 0.5s ease;
+}
+
+.loading-overlay.loaded {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading-spinner {
+  width: 50px;
+  height: 50px;
+  border: 4px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #5865F2;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-overlay p {
+  margin-top: 1rem;
+  font-size: 1.125rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* Info panel */
+.info-panel {
+  position: absolute;
+  top: 80px;
+  left: 20px;
+  width: 280px;
+  background-color: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  padding: 1.5rem;
+  z-index: 50;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.info-panel h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: #5865F2;
+}
+
+.info-panel ul {
+  list-style: none;
+  margin-bottom: 1.5rem;
+}
+
+.info-panel ul li {
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  color: rgba(255, 255, 255, 0.8);
+  line-height: 1.4;
+}
+
+.info-panel strong {
+  color: #ffffff;
+}
+
+/* Legend icons */
+.legend-icon {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  margin-right: 0.5rem;
+  vertical-align: middle;
+}
+
+.legend-icon.computer-desk {
+  background-color: #8B4513;
+}
+
+.legend-icon.couch-2-seater {
+  background-color: #696969;
+}
+
+.legend-icon.couch-single {
+  background-color: #4682B4;
+}
+
+.legend-icon.bar-stool {
+  background-color: #2a2a2a;
+}
+
+/* Footer */
+footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 0.75rem;
+  text-align: center;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent);
+  pointer-events: none;
+  z-index: 100;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .info-panel {
+    top: auto;
+    bottom: 60px;
+    left: 10px;
+    right: 10px;
+    width: auto;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  h1 {
+    font-size: 1.125rem;
+  }
+
+  .status {
+    font-size: 0.75rem;
+    padding: 0.375rem 0.75rem;
+  }
+}
+
+/* Hide loading overlay when scene is ready */
+body.scene-loaded .loading-overlay {
+  opacity: 0;
+  pointer-events: none;
+}

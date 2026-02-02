@@ -1,0 +1,110 @@
+# ========================================================================
+# Dockerfile for Discord Visual Room - Backend (Development)
+# ========================================================================
+#
+# This Dockerfile is designed for development with hot-reload support.
+# It keeps the source code mounted and uses sbt's native tools for
+# continuous compilation.
+#
+# Key Differences from Production Dockerfile:
+# - Source code is mounted as a volume (not copied)
+# - sbt is included in the final image for compilation
+# - No assembly JAR creation - runs via sbt run
+# - Includes JVM debug agent on port 5005
+# - More verbose logging by default
+#
+# Build:
+#   docker build -f docker/backend/Dockerfile.dev -t discord-visual-room-backend:dev backend/scala
+#
+# Run with Compose:
+#   docker compose -f docker/docker-compose.dev.yml up backend-dev
+#
+# ========================================================================
+
+FROM hseeberger/scala-sbt:jdk17-graalvm-ce-21.0_1.9.7
+
+# Set working directory
+WORKDIR /app
+
+# Metadata labels
+LABEL maintainer="Discord Visual Room Project"
+LABEL description="Development image for Discord Visual Room backend"
+LABEL stage="development"
+
+# Install development tools
+# - curl: for health checks and testing
+# - vim: for editing files inside container if needed
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        vim \
+        net-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy sbt project files
+COPY build.sbt build.sbt
+COPY project/ project/
+
+# Pre-download dependencies (cached layer)
+# This speeds up subsequent builds when dependencies haven't changed
+RUN sbt update
+
+# Copy source code (will be overridden by volume mount in compose)
+COPY src/ src/
+
+# Expose ports
+# 8080: WebSocket port
+# 5005: JVM debug port
+EXPOSE 8080 5005
+
+# ========================================================================
+# JVM Configuration for Development
+# ------------------------------------------------------------------------
+# - More memory for development (1GB max)
+# - Debug agent enabled on port 5005
+# - Verbose GC logging for analysis
+# - Faster JIT compilation for faster startup
+# ========================================================================
+ENV JVM_OPTS="-Xmx1G -Xms256m -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 -XX:+UseG1GC -Djava.security.egd=file:/dev/./urandom"
+
+# Application configuration defaults
+ENV WS_PORT=8080
+ENV WS_HOST=0.0.0.0
+ENV LOG_LEVEL=DEBUG
+
+# ========================================================================
+# Development Script
+# ------------------------------------------------------------------------
+# This script runs the application in development mode.
+# It uses 'sbt run' which automatically recompiles on file changes.
+# ========================================================================
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Print environment configuration\n\
+echo "========================================"\n\
+echo "Discord Visual Room - Backend Development"\n\
+echo "========================================"\n\
+echo "WS_HOST: ${WS_HOST}"\n\
+echo "WS_PORT: ${WS_PORT}"\n\
+echo "LLM_SERVER_URL: ${LLM_SERVER_URL}"\n\
+echo "LOG_LEVEL: ${LOG_LEVEL}"\n\
+echo "========================================"\n\
+\n\
+# Run the application using sbt\n\
+# The ~ before run enables continuous compilation on file changes\n\
+exec sbt "runMain com.discordvisualroom.Main"\n\
+' > /app/run.sh && chmod +x /app/run.sh
+
+# Keep container running for development
+CMD ["/app/run.sh"]
+
+# ========================================================================
+# Development Notes
+# ========================================================================
+# 1. Source code should be mounted as a volume in docker-compose.dev.yml
+# 2. Changes to source files trigger automatic recompilation via sbt
+# 3. Connect debugger to localhost:5005 for remote debugging
+# 4. Logs are written to stdout for docker logs viewing
+# ========================================================================
+

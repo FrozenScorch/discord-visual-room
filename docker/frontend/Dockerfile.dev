@@ -1,0 +1,131 @@
+# ========================================================================
+# Dockerfile for Discord Visual Room - Frontend (Development)
+# ========================================================================
+#
+# This Dockerfile is designed for development with hot-reload support.
+# It runs the Vite development server which provides:
+# - Hot Module Replacement (HMR) for instant updates
+# - Source maps for easier debugging
+# - TypeScript on-the-fly compilation
+#
+# Key Differences from Production Dockerfile:
+# - Source code is mounted as a volume (not copied)
+# - Vite dev server instead of nginx
+# - No build step - runs directly from source
+# - More verbose logging
+#
+# Build:
+#   docker build -f docker/frontend/Dockerfile.dev -t discord-visual-room-frontend:dev frontend
+#
+# Run with Compose:
+#   docker compose -f docker/docker-compose.dev.yml up frontend-dev
+#
+# ========================================================================
+
+FROM node:20-alpine
+
+# Set working directory
+WORKDIR /app
+
+# Metadata labels
+LABEL maintainer="Discord Visual Room Project"
+LABEL description="Development image for Discord Visual Room frontend"
+LABEL stage="development"
+
+# Install development tools
+# - curl: For health checks
+# - bash: For custom scripts
+RUN apk add --no-cache \
+    curl \
+    bash && \
+    rm -rf /var/cache/apk/*
+
+# Copy package files first for better Docker layer caching
+COPY package*.json ./
+
+# Check if this is part of a workspace (monorepo)
+# If so, we need to handle shared dependencies
+RUN if grep -q '"workspace:' package.json; then \
+        echo "Workspace detected - installing pnpm for workspace support"; \
+        npm install -g pnpm; \
+    else \
+        echo "Standalone project - using npm"; \
+    fi
+
+# Install dependencies
+# In dev mode, we install all dependencies including devDependencies
+RUN npm install || pnpm install
+
+# Copy configuration files
+COPY tsconfig.json ./
+COPY vite.config.ts ./
+
+# Copy source code (will be overridden by volume mount in compose)
+COPY src ./src
+
+# Expose Vite dev server port
+EXPOSE 8000
+
+# ========================================================================
+# Vite Development Server Configuration
+# ------------------------------------------------------------------------
+# Environment variables for Vite configuration
+# ========================================================================
+ENV VITE_API_URL=ws://localhost:8080
+ENV VITE_PORT=8000
+ENV VITE_HOST=0.0.0.0
+
+# ========================================================================
+# Development Script
+# ------------------------------------------------------------------------
+# Runs the Vite development server with HMR enabled.
+# Changes to source files trigger automatic rebuild.
+# ========================================================================
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Print startup banner\n\
+cat << "EOF"\n\
+================================================================================
+   ____                _    ____  ____  __  __
+  |  _ \ _   _ _ __   / \  |  _ \|  _ \|  \/  |
+  | |_) | | | | '_ \ / _ \ | | | | | | | |\/| |
+  |  _ <| |_| | | | / ___ \| |_| | |_| | |  | |
+  |_| \_\\__,_|_| |_/_/   \_\____/|____/|_|  |_|
+\n\
+              Discord Visual Room - Frontend Development
+================================================================================
+EOF\n\
+\n\
+echo "Configuration:"\n\
+echo "  VITE_API_URL: ${VITE_API_URL}"\n\
+echo "  VITE_HOST:    ${VITE_HOST}"\n\
+echo "  VITE_PORT:    ${VITE_PORT}"\n\
+echo "====================="\n\
+echo ""\n\
+echo "Starting Vite development server..."\n\
+echo "Access the frontend at: http://localhost:${VITE_PORT:-8000}"\n\
+echo ""\n\
+\n\
+# Run Vite dev server\n\
+# --host: Listen on all interfaces\n\
+# --port: Use configured port\n\
+exec npm run dev -- --host ${VITE_HOST:-0.0.0.0} --port ${VITE_PORT:-8000}\n\
+' > /app/run.sh && chmod +x /app/run.sh
+
+# Health check for dev server
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/ || exit 1
+
+CMD ["/app/run.sh"]
+
+# ========================================================================
+# Development Notes
+# ========================================================================
+# 1. Source code should be mounted as a volume in docker-compose.dev.yml
+# 2. Changes to source files trigger automatic HMR update via Vite
+# 3. Access the frontend at http://localhost:8000
+# 4. The Vite dev server provides source maps for debugging
+# 5. TypeScript errors are shown in the browser overlay
+# ========================================================================
+

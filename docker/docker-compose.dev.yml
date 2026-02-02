@@ -1,0 +1,143 @@
+version: '3.8'
+
+# Docker Compose for Discord Visual Room - Development Environment
+#
+# This configuration enables hot-reload and live development for both
+# backend and frontend services.
+#
+# Key Features:
+# - Volume mounts for live code reloading
+# - Development servers instead of production builds
+# - Enhanced logging for debugging
+# - No resource limits for development
+#
+# Usage:
+#   docker compose -f docker/docker-compose.dev.yml up
+#   docker compose -f docker/docker-compose.dev.yml up --build
+#   docker compose -f docker/docker-compose.dev.yml down -v
+
+services:
+  # ========================================================================
+  # Backend Service - Development Mode
+  # ------------------------------------------------------------------------
+  # - Uses sbt native image with hot-reload support
+  # - Source code mounted for live changes
+  # - Debug logging enabled
+  # ========================================================================
+  backend-dev:
+    build:
+      context: ../backend/scala
+      dockerfile: ../../docker/backend/Dockerfile.dev
+      cache_from:
+        - discord-visual-room-backend:dev
+    image: discord-visual-room-backend:dev
+    container_name: discord-visual-room-backend-dev
+    restart: "no"  # Don't auto-restart in dev
+
+    # Network mode: host (required by deployment constraints)
+    network_mode: host
+
+    environment:
+      # LLM Server Configuration (Windows PC)
+      - LLM_SERVER_URL=${LLM_SERVER_URL:-http://192.168.68.62:1234}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-30000}
+      - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-3}
+
+      # WebSocket Configuration
+      - WS_PORT=${WS_PORT:-8080}
+      - WS_HOST=${WS_HOST:-0.0.0.0}
+
+      # Discord Bot Configuration
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+
+      # Room Configuration
+      - ROOM_ID=${ROOM_ID:-default-room}
+      - ROOM_NAME=${ROOM_NAME:-Discord Visual Room}
+      - ROOM_MAX_USERS=${ROOM_MAX_USERS:-10}
+      - ROOM_WIDTH=${ROOM_WIDTH:-10}
+      - ROOM_HEIGHT=${ROOM_HEIGHT:-3}
+      - ROOM_DEPTH=${ROOM_DEPTH:-10}
+
+      # JVM Options (debug mode, more memory)
+      - JVM_OPTS=${JVM_OPTS:--Xmx1G -Xms256m -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005}
+
+      # Logging (verbose for development)
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+
+    # Volume mounts for hot-reload
+    # Source code is mounted so changes are reflected immediately
+    volumes:
+      - ../backend/scala:/app:cached
+      - backend-sbt-cache:/root/.sbt
+      - backend-ivy-cache:/root/.ivy2
+      - backend-coursier-cache:/root/.cache/coursier
+
+    # No health check in development (server may restart during development)
+    # No resource limits in development
+
+    # Keep container running for interactive debugging
+    stdin_open: true
+    tty: true
+
+  # ========================================================================
+  # Frontend Service - Development Mode
+  # ------------------------------------------------------------------------
+  # - Uses Vite dev server with HMR (Hot Module Replacement)
+  # - Source code mounted for live changes
+  # - Runs on port 8000
+  # ========================================================================
+  frontend-dev:
+    build:
+      context: ../frontend
+      dockerfile: ../../docker/frontend/Dockerfile.dev
+      cache_from:
+        - discord-visual-room-frontend:dev
+      args:
+        - VITE_API_URL=${VITE_API_URL:-ws://localhost:8080}
+    image: discord-visual-room-frontend:dev
+    container_name: discord-visual-room-frontend-dev
+    restart: "no"  # Don't auto-restart in dev
+
+    # Network mode: host (required by deployment constraints)
+    network_mode: host
+
+    environment:
+      # Backend WebSocket URL (from host perspective)
+      - VITE_API_URL=${VITE_API_URL:-ws://localhost:8080}
+      # Vite dev server configuration
+      - VITE_PORT=${VITE_PORT:-8000}
+      - VITE_HOST=${VITE_HOST:-0.0.0.0}
+
+    # Volume mounts for hot-reload
+    # Source code and node_modules are mounted
+    volumes:
+      - ../frontend:/app:cached
+      - frontend-node-modules:/app/node_modules
+
+    # Keep container running for interactive debugging
+    stdin_open: true
+    tty: true
+
+# ========================================================================
+# Volumes - Development Caches
+# ========================================================================
+# Cache volumes to speed up rebuilds by preserving dependencies
+volumes:
+  # sbt and Scala build caches
+  backend-sbt-cache:
+    driver: local
+  backend-ivy-cache:
+    driver: local
+  backend-coursier-cache:
+    driver: local
+
+  # Node.js modules cache
+  frontend-node-modules:
+    driver: local
+
+# ========================================================================
+# Networks
+# ========================================================================
+# Note: Using host network mode as per deployment constraints.
+# ========================================================================
+

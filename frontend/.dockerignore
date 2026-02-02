@@ -1,0 +1,101 @@
+# ========================================================================
+# .dockerignore - Discord Visual Room Frontend
+# ========================================================================
+#
+# Files and directories listed here will be excluded from Docker build context.
+# This speeds up builds and reduces image size.
+#
+# ========================================================================
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Node modules (will be installed during build)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build output (will be built in container)
+dist/
+build/
+out/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Logs and temporary files
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# Documentation
+*.md
+docs/
+README.md
+LICENSE
+
+# Docker files (don't copy into image)
+docker/
+Dockerfile*
+.dockerignore
+docker-compose*
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Test files (not needed in production)
+test/
+tests/
+spec/
+__tests__/
+*.test.ts
+*.spec.ts
+
+# Cache
+.cache/
+.parcel-cache/
+.vite/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# ESLint cache
+.eslintcache
+
+# Other
+*.orig
+*.bak
+*.rej
+
+# Workspace (monorepo) references
+# Note: Keep workspace protocol but ignore local node_modules
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+

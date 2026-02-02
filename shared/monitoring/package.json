@@ -1,0 +1,8 @@
+{
+  "name": "@discord-visual-room/monitoring",
+  "version": "1.0.0",
+  "description": "Shared monitoring and observability types for Discord Visual Room",
+  "main": "src/types.ts",
+  "types": "src/types.ts",
+  "private": true
+}

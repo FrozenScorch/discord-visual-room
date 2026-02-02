@@ -1,0 +1,86 @@
+# ========================================================================
+# .dockerignore - Discord Visual Room Backend
+# ========================================================================
+#
+# Files and directories listed here will be excluded from Docker build context.
+# This speeds up builds and reduces image size.
+#
+# ========================================================================
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.iml
+*.ipr
+.iws/
+.project
+.classpath
+.settings/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Build artifacts (should be built in container)
+target/
+project/target/
+project/project/
+dist/
+out/
+
+# Scala/sbt specific
+.bsp/
+metals.sbt
+metals/
+.bloop/
+
+# Logs and temporary files
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# Documentation
+*.md
+docs/
+README.md
+LICENSE
+
+# Docker files (don't copy into image)
+docker/
+Dockerfile*
+.dockerignore
+docker-compose*
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Test files (not needed in production)
+test/
+tests/
+spec/
+
+# Cache and dependencies (will be downloaded during build)
+.sbtserver/
+.cache/
+
+# Other
+*.orig
+*.bak
+*.rej
+

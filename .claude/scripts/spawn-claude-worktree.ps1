@@ -114,8 +114,12 @@ $sessionEntry = @{
 }
 
 if (Test-Path $sessionsFile) {
-    $sessions = Get-Content $sessionsFile | ConvertFrom-Json
-    $sessions += $sessionEntry
+    $sessions = @(Get-Content $sessionsFile | ConvertFrom-Json)
+    if ($sessions.Count -eq 0) {
+        $sessions = @($sessionEntry)
+    } else {
+        $sessions = @($sessions) + @($sessionEntry)
+    }
 } else {
     $sessions = @($sessionEntry)
 }
