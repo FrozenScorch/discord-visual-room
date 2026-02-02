@@ -1,0 +1,30 @@
+{
+  "name": "discord-visual-room",
+  "version": "1.0.0",
+  "description": "Fault-tolerant 3D Discord Visualizer with elastic environment and LLM-enhanced layout",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "shared/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "npm run build:shared && npm run build:frontend",
+    "build:shared": "cd shared/types && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "test": "npm run test --workspaces",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "eslint": "^8.57.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  }
+}
