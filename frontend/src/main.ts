@@ -24,21 +24,19 @@ class DiscordVisualRoomApp {
   private wsClient: WSClient | null = null;
   private container: HTMLElement;
   private statusElement: HTMLElement;
+  private topBar: HTMLElement | null;
+  private userCountEl: HTMLElement | null;
 
   constructor() {
-    // Get container element
     this.container = document.getElementById('canvas-container')!;
     if (!this.container) {
       throw new Error('Canvas container not found');
     }
 
-    // Get status element
     this.statusElement = document.getElementById('connection-status')!;
-    if (!this.statusElement) {
-      console.warn('Status element not found');
-    }
+    this.topBar = document.getElementById('top-bar');
+    this.userCountEl = document.getElementById('user-count-number');
 
-    // Initialize application
     this.init();
   }
 
@@ -96,6 +94,10 @@ class DiscordVisualRoomApp {
     this.wsClient.onSceneUpdate((message: SceneUpdateMessage) => {
       if (this.renderer) {
         this.renderer.updateScene(message.payload);
+        // Update user count badge
+        if (this.userCountEl) {
+          this.userCountEl.textContent = String(message.payload.users.length);
+        }
       }
     });
   }
@@ -105,13 +107,14 @@ class DiscordVisualRoomApp {
    */
   private updateStatus(state: string, message: string): void {
     if (this.statusElement) {
-      this.statusElement.textContent = message;
-      this.statusElement.className = `status ${state}`;
+      const statusText = this.statusElement.querySelector('.status-text');
+      if (statusText) statusText.textContent = message;
+      this.statusElement.className = `status-dot ${state}`;
 
-      // Auto-hide success message after 3 seconds
-      if (state === 'connected') {
+      // Fade top bar after connection
+      if (state === 'connected' && this.topBar) {
         setTimeout(() => {
-          this.statusElement.className = 'status connected hidden';
+          this.topBar?.classList.add('faded');
         }, 3000);
       }
     }

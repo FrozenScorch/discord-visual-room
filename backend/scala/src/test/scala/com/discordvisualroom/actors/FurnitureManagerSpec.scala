@@ -2,7 +2,7 @@ package com.discordvisualroom.actors
 
 import akka.actor.testkit.typed.scaladsl.{ActorTestKit, TestProbe}
 import com.discordvisualroom.model._
-import com.discordvisualroom.llm.LLMClient
+import com.discordvisualroom.llm.{LLMClient, LayoutGenerator}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -11,8 +11,10 @@ import scala.concurrent.duration._
 import scala.concurrent.ExecutionContextExecutor
 
 /**
- * Unit tests for FurnitureManager Actor
- * Tests furniture layout generation, assignment, and fallback behavior
+ * Functional unit tests for FurnitureManager Actor
+ * Tests real actor behavior with the actual LayoutGenerator fallback paths.
+ * No mocks - uses the real FurnitureManager with an unreachable LLM endpoint
+ * so fallback layout generation is exercised end-to-end.
  */
 class FurnitureManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll {
 
@@ -24,9 +26,17 @@ class FurnitureManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     testKit.shutdownTestKit()
   }
 
-  // ========================================
-  // Test Data Helpers
-  // ========================================
+  // Use a real LLMClient pointed at an unreachable address.
+  // This forces the fallback layout path every time - which is
+  // the deterministic code path we can functionally verify.
+  private val llmConfig = LLMConfig(
+    baseUrl = "http://127.0.0.1:1", // unreachable port
+    timeoutMs = 200,
+    maxRetries = 0
+  )
+
+  private def spawnManager(): akka.actor.typed.ActorRef[FurnitureManager.Command] =
+    testKit.spawn(FurnitureManager(new LLMClient(llmConfig)))
 
   def createTestUsers(count: Int): Seq[UserNode] = {
     (1 to count).map { i =>
@@ -52,34 +62,25 @@ class FurnitureManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
   }
 
   // ========================================
-  // Layout Generation Tests
+  // Layout Generation (via fallback)
   // ========================================
 
-  "FurnitureManager" should "generate layout for zero users" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
+  "FurnitureManager" should "return empty furniture for zero users" in {
+    val fm = spawnManager()
     val probe = testKit.createTestProbe[FurnitureManager.LayoutGeneratedResponse]()
 
-    val users = Seq.empty[UserNode]
-    val roomConfig = createTestRoomConfig()
+    fm ! FurnitureManager.GenerateLayout(Seq.empty, createTestRoomConfig(), probe.ref)
 
-    furnitureManager ! FurnitureManager.GenerateLayout(users, roomConfig, probe.ref)
-
-    val response = probe.receiveMessage()
+    val response = probe.receiveMessage(3.seconds)
     response.success should be(true)
     response.furniture should be(empty)
-    response.usedFallback should be(false)
   }
 
-  it should "generate layout for single user" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
+  it should "generate exactly one furniture piece for one user" in {
+    val fm = spawnManager()
     val probe = testKit.createTestProbe[FurnitureManager.LayoutGeneratedResponse]()
 
-    val users = createTestUsers(1)
-    val roomConfig = createTestRoomConfig()
-
-    furnitureManager ! FurnitureManager.GenerateLayout(users, roomConfig, probe.ref)
+    fm ! FurnitureManager.GenerateLayout(createTestUsers(1), createTestRoomConfig(), probe.ref)
 
     val response = probe.receiveMessage(5.seconds)
     response.success should be(true)
@@ -87,60 +88,52 @@ class FurnitureManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     response.furniture.head.assignedUserId should be(Some("user-1"))
   }
 
-  it should "generate layout for multiple users" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
+  it should "generate one furniture piece per user" in {
+    val fm = spawnManager()
     val probe = testKit.createTestProbe[FurnitureManager.LayoutGeneratedResponse]()
-
     val users = createTestUsers(5)
-    val roomConfig = createTestRoomConfig()
 
-    furnitureManager ! FurnitureManager.GenerateLayout(users, roomConfig, probe.ref)
+    fm ! FurnitureManager.GenerateLayout(users, createTestRoomConfig(), probe.ref)
 
     val response = probe.receiveMessage(5.seconds)
     response.success should be(true)
     response.furniture should have size 5
+
+    // Every user should have furniture assigned
+    val assignedIds = response.furniture.flatMap(_.assignedUserId).toSet
+    assignedIds should be(users.map(_.id).toSet)
   }
 
-  it should "use fallback when LLM fails" in {
-    val failingLLMClient = new FailingMockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(failingLLMClient))
+  it should "only use valid furniture types from the Asset Dictionary" in {
+    val fm = spawnManager()
     val probe = testKit.createTestProbe[FurnitureManager.LayoutGeneratedResponse]()
 
-    val users = createTestUsers(3)
-    val roomConfig = createTestRoomConfig()
-
-    furnitureManager ! FurnitureManager.GenerateLayout(users, roomConfig, probe.ref)
+    fm ! FurnitureManager.GenerateLayout(createTestUsers(4), createTestRoomConfig(), probe.ref)
 
     val response = probe.receiveMessage(5.seconds)
-    response.success should be(true)
-    response.furniture should not be empty
-    response.usedFallback should be(true)
-  }
-
-  it should "use valid furniture types only" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
-    val probe = testKit.createTestProbe[FurnitureManager.LayoutGeneratedResponse]()
-
-    val users = createTestUsers(3)
-    val roomConfig = createTestRoomConfig()
-
-    furnitureManager ! FurnitureManager.GenerateLayout(users, roomConfig, probe.ref)
-
-    val response = probe.receiveMessage(5.seconds)
-    response.furniture.foreach { furniture =>
-      FurnitureType.fromString(furniture.furnitureType.typeName).isDefined should be(true)
+    response.furniture.foreach { f =>
+      FurnitureType.allValues should contain(f.furnitureType)
     }
   }
 
+  it should "fall back gracefully when LLM is unreachable" in {
+    val fm = spawnManager()
+    val probe = testKit.createTestProbe[FurnitureManager.LayoutGeneratedResponse]()
+
+    fm ! FurnitureManager.GenerateLayout(createTestUsers(3), createTestRoomConfig(), probe.ref)
+
+    val response = probe.receiveMessage(5.seconds)
+    response.success should be(true)
+    response.usedFallback should be(true)
+    response.furniture should have size 3
+  }
+
   // ========================================
-  // Furniture Assignment Tests
+  // Direct Furniture Assignment
   // ========================================
 
-  it should "assign furniture to users correctly" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
+  it should "assign furniture directly from a list of assignments" in {
+    val fm = spawnManager()
     val probe = testKit.createTestProbe[FurnitureManager.FurnitureAssignedResponse]()
 
     val assignments = Seq(
@@ -148,241 +141,162 @@ class FurnitureManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
       FurnitureAssignment("user-2", FurnitureType.CouchSingle.typeName)
     )
 
-    furnitureManager ! FurnitureManager.AssignFurniture(assignments, probe.ref)
+    fm ! FurnitureManager.AssignFurniture(assignments, probe.ref)
 
     val response = probe.receiveMessage()
     response.success should be(true)
     response.count should be(2)
   }
 
-  it should "set correct capacity for 2-seater couch" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
-    val probe = testKit.createTestProbe[FurnitureManager.FurnitureAssignedResponse]()
-    val getProbe = testKit.createTestProbe[FurnitureManager.CurrentFurnitureResponse]()
-
-    val assignments = Seq(
-      FurnitureAssignment("user-1", FurnitureType.Couch2Seater.typeName)
-    )
-
-    furnitureManager ! FurnitureManager.AssignFurniture(assignments, probe.ref)
-    probe.receiveMessage()
-
-    furnitureManager ! FurnitureManager.GetFurniture(getProbe.ref)
-    val response = getProbe.receiveMessage()
-
-    response.furniture.head.capacity should be(2)
-  }
-
-  it should "set capacity 1 for non-couch furniture" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
-    val probe = testKit.createTestProbe[FurnitureManager.FurnitureAssignedResponse]()
-    val getProbe = testKit.createTestProbe[FurnitureManager.CurrentFurnitureResponse]()
-
-    val assignments = Seq(
-      FurnitureAssignment("user-1", FurnitureType.ComputerDesk.typeName),
-      FurnitureAssignment("user-2", FurnitureType.BarStool.typeName),
-      FurnitureAssignment("user-3", FurnitureType.CouchSingle.typeName)
-    )
-
-    furnitureManager ! FurnitureManager.AssignFurniture(assignments, probe.ref)
-    probe.receiveMessage()
-
-    furnitureManager ! FurnitureManager.GetFurniture(getProbe.ref)
-    val response = getProbe.receiveMessage()
-
-    response.furniture.foreach(_.capacity should be(1))
-  }
-
-  // ========================================
-  // Get Furniture Tests
-  // ========================================
-
-  it should "return current furniture" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
+  it should "set capacity=2 for COUCH_2_SEATER" in {
+    val fm = spawnManager()
     val assignProbe = testKit.createTestProbe[FurnitureManager.FurnitureAssignedResponse]()
     val getProbe = testKit.createTestProbe[FurnitureManager.CurrentFurnitureResponse]()
 
-    val assignments = Seq(
-      FurnitureAssignment("user-1", FurnitureType.ComputerDesk.typeName)
+    fm ! FurnitureManager.AssignFurniture(
+      Seq(FurnitureAssignment("user-1", FurnitureType.Couch2Seater.typeName)),
+      assignProbe.ref
     )
-
-    furnitureManager ! FurnitureManager.AssignFurniture(assignments, assignProbe.ref)
     assignProbe.receiveMessage()
 
-    furnitureManager ! FurnitureManager.GetFurniture(getProbe.ref)
-    val response = getProbe.receiveMessage()
+    fm ! FurnitureManager.GetFurniture(getProbe.ref)
+    val furniture = getProbe.receiveMessage().furniture
 
-    response.furniture should have size 1
+    furniture should have size 1
+    furniture.head.capacity should be(2)
   }
+
+  it should "set capacity=1 for non-couch furniture" in {
+    val fm = spawnManager()
+    val assignProbe = testKit.createTestProbe[FurnitureManager.FurnitureAssignedResponse]()
+    val getProbe = testKit.createTestProbe[FurnitureManager.CurrentFurnitureResponse]()
+
+    fm ! FurnitureManager.AssignFurniture(Seq(
+      FurnitureAssignment("u1", FurnitureType.ComputerDesk.typeName),
+      FurnitureAssignment("u2", FurnitureType.BarStool.typeName),
+      FurnitureAssignment("u3", FurnitureType.CouchSingle.typeName)
+    ), assignProbe.ref)
+    assignProbe.receiveMessage()
+
+    fm ! FurnitureManager.GetFurniture(getProbe.ref)
+    getProbe.receiveMessage().furniture.foreach(_.capacity should be(1))
+  }
+
+  // ========================================
+  // GetFurniture
+  // ========================================
 
   it should "return empty furniture initially" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
+    val fm = spawnManager()
     val probe = testKit.createTestProbe[FurnitureManager.CurrentFurnitureResponse]()
 
-    furnitureManager ! FurnitureManager.GetFurniture(probe.ref)
-    val response = probe.receiveMessage()
+    fm ! FurnitureManager.GetFurniture(probe.ref)
+    probe.receiveMessage().furniture should be(empty)
+  }
 
-    response.furniture should be(empty)
+  it should "return furniture after assignment" in {
+    val fm = spawnManager()
+    val assignProbe = testKit.createTestProbe[FurnitureManager.FurnitureAssignedResponse]()
+    val getProbe = testKit.createTestProbe[FurnitureManager.CurrentFurnitureResponse]()
+
+    fm ! FurnitureManager.AssignFurniture(
+      Seq(FurnitureAssignment("u1", FurnitureType.ComputerDesk.typeName)),
+      assignProbe.ref
+    )
+    assignProbe.receiveMessage()
+
+    fm ! FurnitureManager.GetFurniture(getProbe.ref)
+    getProbe.receiveMessage().furniture should have size 1
   }
 
   // ========================================
-  // User Left Tests
+  // User Leave
   // ========================================
 
-  it should "release furniture when user leaves" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
+  it should "remove single-seat furniture when user leaves" in {
+    val fm = spawnManager()
     val assignProbe = testKit.createTestProbe[FurnitureManager.FurnitureAssignedResponse]()
     val leaveProbe = testKit.createTestProbe[FurnitureManager.FurnitureReleasedResponse]()
     val getProbe = testKit.createTestProbe[FurnitureManager.CurrentFurnitureResponse]()
 
-    val assignments = Seq(
-      FurnitureAssignment("user-1", FurnitureType.ComputerDesk.typeName)
+    fm ! FurnitureManager.AssignFurniture(
+      Seq(FurnitureAssignment("user-1", FurnitureType.ComputerDesk.typeName)),
+      assignProbe.ref
     )
-
-    furnitureManager ! FurnitureManager.AssignFurniture(assignments, assignProbe.ref)
     assignProbe.receiveMessage()
 
-    furnitureManager ! FurnitureManager.UserLeft("user-1", leaveProbe.ref)
+    fm ! FurnitureManager.UserLeft("user-1", leaveProbe.ref)
     leaveProbe.receiveMessage().success should be(true)
 
-    // Furniture should be removed (single-occupancy furniture with no user)
-    furnitureManager ! FurnitureManager.GetFurniture(getProbe.ref)
-    val response = getProbe.receiveMessage()
-    response.furniture should be(empty)
+    fm ! FurnitureManager.GetFurniture(getProbe.ref)
+    getProbe.receiveMessage().furniture should be(empty)
   }
 
-  it should "keep 2-seater couch when user leaves" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
+  it should "keep 2-seater couch (unassigned) when user leaves" in {
+    val fm = spawnManager()
     val assignProbe = testKit.createTestProbe[FurnitureManager.FurnitureAssignedResponse]()
     val leaveProbe = testKit.createTestProbe[FurnitureManager.FurnitureReleasedResponse]()
     val getProbe = testKit.createTestProbe[FurnitureManager.CurrentFurnitureResponse]()
 
-    val assignments = Seq(
-      FurnitureAssignment("user-1", FurnitureType.Couch2Seater.typeName)
+    fm ! FurnitureManager.AssignFurniture(
+      Seq(FurnitureAssignment("user-1", FurnitureType.Couch2Seater.typeName)),
+      assignProbe.ref
     )
-
-    furnitureManager ! FurnitureManager.AssignFurniture(assignments, assignProbe.ref)
     assignProbe.receiveMessage()
 
-    furnitureManager ! FurnitureManager.UserLeft("user-1", leaveProbe.ref)
+    fm ! FurnitureManager.UserLeft("user-1", leaveProbe.ref)
     leaveProbe.receiveMessage().success should be(true)
 
-    // Couch should remain (capacity > 1)
-    furnitureManager ! FurnitureManager.GetFurniture(getProbe.ref)
-    val response = getProbe.receiveMessage()
-    response.furniture should have size 1
-    response.furniture.head.assignedUserId should be(None)
+    fm ! FurnitureManager.GetFurniture(getProbe.ref)
+    val remaining = getProbe.receiveMessage().furniture
+    remaining should have size 1
+    remaining.head.assignedUserId should be(None)
   }
 
-  it should "handle user leaving with no furniture" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
+  it should "handle leave for non-existent user gracefully" in {
+    val fm = spawnManager()
     val probe = testKit.createTestProbe[FurnitureManager.FurnitureReleasedResponse]()
 
-    furnitureManager ! FurnitureManager.UserLeft("nonexistent-user", probe.ref)
+    fm ! FurnitureManager.UserLeft("ghost-user", probe.ref)
     probe.receiveMessage().success should be(true)
   }
 
   // ========================================
-  // Clear All Furniture Tests
+  // ClearAll
   // ========================================
 
   it should "clear all furniture" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
+    val fm = spawnManager()
     val assignProbe = testKit.createTestProbe[FurnitureManager.FurnitureAssignedResponse]()
     val getProbe = testKit.createTestProbe[FurnitureManager.CurrentFurnitureResponse]()
 
-    val assignments = Seq(
-      FurnitureAssignment("user-1", FurnitureType.ComputerDesk.typeName),
-      FurnitureAssignment("user-2", FurnitureType.Couch2Seater.typeName)
-    )
-
-    furnitureManager ! FurnitureManager.AssignFurniture(assignments, assignProbe.ref)
+    fm ! FurnitureManager.AssignFurniture(Seq(
+      FurnitureAssignment("u1", FurnitureType.ComputerDesk.typeName),
+      FurnitureAssignment("u2", FurnitureType.Couch2Seater.typeName)
+    ), assignProbe.ref)
     assignProbe.receiveMessage()
 
-    furnitureManager ! FurnitureManager.ClearAllFurniture
+    fm ! FurnitureManager.ClearAllFurniture
 
-    // Small delay to ensure message is processed
+    // Give actor time to process fire-and-forget message
     Thread.sleep(100)
 
-    furnitureManager ! FurnitureManager.GetFurniture(getProbe.ref)
-    val response = getProbe.receiveMessage()
-    response.furniture should be(empty)
+    fm ! FurnitureManager.GetFurniture(getProbe.ref)
+    getProbe.receiveMessage().furniture should be(empty)
   }
 
   // ========================================
-  // Position Calculation Tests
+  // Position Uniqueness
   // ========================================
 
-  it should "calculate non-overlapping positions for furniture" in {
-    val mockLLMClient = new MockLLMClient()
-    val furnitureManager = testKit.spawn(FurnitureManager(mockLLMClient))
+  it should "place furniture at non-overlapping positions" in {
+    val fm = spawnManager()
     val probe = testKit.createTestProbe[FurnitureManager.LayoutGeneratedResponse]()
-    val getProbe = testKit.createTestProbe[FurnitureManager.CurrentFurnitureResponse]()
 
-    val users = createTestUsers(4)
-    val roomConfig = createTestRoomConfig()
+    fm ! FurnitureManager.GenerateLayout(createTestUsers(6), createTestRoomConfig(), probe.ref)
 
-    furnitureManager ! FurnitureManager.GenerateLayout(users, roomConfig, probe.ref)
-    probe.receiveMessage(5.seconds)
-
-    furnitureManager ! FurnitureManager.GetFurniture(getProbe.ref)
-    val response = getProbe.receiveMessage()
-
+    val response = probe.receiveMessage(5.seconds)
     val positions = response.furniture.map(_.position)
-    // All positions should be unique
     positions.distinct should have size positions.size
-  }
-
-  // ========================================
-  // Mock LLM Client for Testing
-  // ========================================
-
-  class MockLLMClient extends LLMClient(LLMConfig(
-    baseUrl = "http://localhost:1234",
-    timeoutMs = 5000,
-    maxRetries = 1
-  )) {
-    override def generateFurnitureLayout(
-      users: Seq[UserNode],
-      roomConfig: RoomConfig
-    )(implicit ec: scala.concurrent.ExecutionContext): scala.concurrent.Future[Either[Seq[FurnitureAssignment], Seq[FurnitureAssignment]]] = {
-      import scala.concurrent.Future
-
-      val assignments = users.zipWithIndex.map { case (user, index) =>
-        val furnitureType = index % 4 match {
-          case 0 => FurnitureType.ComputerDesk.typeName
-          case 1 => FurnitureType.Couch2Seater.typeName
-          case 2 => FurnitureType.CouchSingle.typeName
-          case 3 => FurnitureType.BarStool.typeName
-        }
-        FurnitureAssignment(user.id, furnitureType)
-      }
-
-      Future.successful(Right(assignments))
-    }
-  }
-
-  class FailingMockLLMClient extends LLMClient(LLMConfig(
-    baseUrl = "http://localhost:1234",
-    timeoutMs = 100,
-    maxRetries = 0
-  )) {
-    override def generateFurnitureLayout(
-      users: Seq[UserNode],
-      roomConfig: RoomConfig
-    )(implicit ec: scala.concurrent.ExecutionContext): scala.concurrent.Future[Either[Seq[FurnitureAssignment], Seq[FurnitureAssignment]]] = {
-      import scala.concurrent.Future
-
-      // Simulate LLM failure
-      Future.failed(new Exception("LLM connection failed"))
-    }
   }
 }

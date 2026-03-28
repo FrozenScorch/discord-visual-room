@@ -45,8 +45,7 @@ libraryDependencies ++= Seq(
   // Testing
   "com.typesafe.akka" %% "akka-actor-testkit-typed" % AkkaVersion % Test,
   "com.typesafe.akka" %% "akka-stream-testkit" % AkkaVersion % Test,
-  "org.scalatest" %% "scalatest" % "3.2.17" % Test,
-  "org.scalatestplus" %% "scalacheck-1-17" % "3.2.17.0" % Test
+  "org.scalatest" %% "scalatest" % "3.2.17" % Test
 )
 
 // Compiler options

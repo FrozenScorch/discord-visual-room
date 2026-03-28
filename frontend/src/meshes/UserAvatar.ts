@@ -3,29 +3,38 @@ import type { UserNode } from '../types';
 import {
   toThreeVector3,
   createTextSprite,
+  createActivitySprite,
   createSpeakingIndicator,
   createDefaultAvatarTexture,
 } from '../utils/sceneUtils';
 
 /**
- * UserAvatar - Represents a user in the 3D space
+ * UserAvatar - Cute 3D representation of a Discord user
  *
  * Features:
- * - 3D avatar (sphere with user avatar texture)
- * - Username label above avatar
- * - Speaking indicator (green glow when talking)
- * - Smooth position updates
+ * - Round avatar billboard with Discord PFP
+ * - Clean username pill label
+ * - Activity label (game/status)
+ * - Speaking pulse ring + gentle bounce
+ * - Spawn animation (scale up from 0)
+ * - Smooth position lerping
  */
 export class UserAvatar {
   public readonly mesh: THREE.Group;
   private userData: UserNode;
   private targetPosition: THREE.Vector3;
   private targetRotation: THREE.Euler;
-  private speakingIndicator: THREE.Mesh;
+  private speakingRing: THREE.Mesh;
   private usernameLabel: THREE.Sprite;
+  private activityLabel: THREE.Sprite | null = null;
   private avatarSprite!: THREE.Sprite;
+  private avatarBacking!: THREE.Mesh;
   private isSpeaking: boolean = false;
   private speakingPulseTime: number = 0;
+  private spawnProgress: number = 0;
+  private isSpawning: boolean = true;
+  private isDespawning: boolean = false;
+  private despawnCallback: (() => void) | null = null;
 
   constructor(userData: UserNode, avatarTexture?: THREE.Texture) {
     this.userData = userData;
@@ -36,43 +45,80 @@ export class UserAvatar {
     this.mesh.position.copy(this.targetPosition);
     this.mesh.rotation.copy(this.targetRotation);
 
-    // Create avatar components
-    this.createAvatarBody(avatarTexture);
+    // Start at scale 0 for spawn animation
+    this.mesh.scale.set(0, 0, 0);
+
+    // Create avatar disc (main visual)
+    this.createAvatarDisc(avatarTexture);
+
+    // Username label above avatar
     this.usernameLabel = createTextSprite(userData.displayName);
-    this.usernameLabel.position.set(0, 1.5, 0);
+    this.usernameLabel.position.set(0, 1.4, 0);
     this.mesh.add(this.usernameLabel);
 
-    // Speaking indicator (hidden by default)
-    this.speakingIndicator = createSpeakingIndicator();
-    this.speakingIndicator.position.set(0, 1.2, 0);
-    this.speakingIndicator.visible = false;
-    this.mesh.add(this.speakingIndicator);
+    // Activity label if present
+    this.updateActivityLabel();
 
-    // Set user data on mesh for identification
-    this.mesh.userData = {
-      type: 'user',
-      userId: userData.id,
-    };
+    // Speaking ring (hidden by default)
+    this.speakingRing = createSpeakingIndicator();
+    this.speakingRing.position.set(0, 0.65, 0);
+    this.speakingRing.visible = false;
+    this.mesh.add(this.speakingRing);
+
+    // Identification data
+    this.mesh.userData = { type: 'user', userId: userData.id };
   }
 
   /**
-   * Update avatar position and rotation (called every frame)
-   * @param lerpFactor - Interpolation factor (0-1) for smooth movement
+   * Per-frame update - animations, lerping, speaking effects
    */
   public update(lerpFactor: number, deltaTime: number): void {
-    // Smooth position update
+    // Spawn animation - smooth elastic scale-in
+    if (this.isSpawning) {
+      this.spawnProgress = Math.min(this.spawnProgress + deltaTime * 2.5, 1);
+      const t = this.spawnProgress;
+      // Elastic ease-out
+      const elastic = t === 1 ? 1 : Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * (2 * Math.PI / 3)) + 1;
+      this.mesh.scale.setScalar(elastic);
+      if (this.spawnProgress >= 1) {
+        this.isSpawning = false;
+        this.mesh.scale.setScalar(1);
+      }
+    }
+
+    // Despawn animation - shrink + fade
+    if (this.isDespawning) {
+      this.spawnProgress = Math.max(this.spawnProgress - deltaTime * 3, 0);
+      this.mesh.scale.setScalar(this.spawnProgress);
+      if (this.spawnProgress <= 0) {
+        this.isDespawning = false;
+        if (this.despawnCallback) this.despawnCallback();
+      }
+      return; // Skip other updates during despawn
+    }
+
+    // Smooth position lerp
     this.mesh.position.lerp(this.targetPosition, lerpFactor);
 
-    // Smooth rotation update
+    // Smooth rotation lerp
     this.mesh.rotation.x = THREE.MathUtils.lerp(this.mesh.rotation.x, this.targetRotation.x, lerpFactor);
     this.mesh.rotation.y = THREE.MathUtils.lerp(this.mesh.rotation.y, this.targetRotation.y, lerpFactor);
     this.mesh.rotation.z = THREE.MathUtils.lerp(this.mesh.rotation.z, this.targetRotation.z, lerpFactor);
 
-    // Update speaking indicator pulse
+    // Speaking animation
     if (this.isSpeaking) {
-      this.speakingPulseTime += deltaTime * 5;
-      const scale = 1 + Math.sin(this.speakingPulseTime) * 0.3;
-      this.speakingIndicator.scale.set(scale, scale, scale);
+      this.speakingPulseTime += deltaTime * 4;
+
+      // Ring pulse
+      const ringScale = 1 + Math.sin(this.speakingPulseTime) * 0.15;
+      this.speakingRing.scale.set(ringScale, ringScale, ringScale);
+      const ringMat = this.speakingRing.material as THREE.MeshBasicMaterial;
+      ringMat.opacity = 0.5 + Math.sin(this.speakingPulseTime * 1.5) * 0.3;
+
+      // Gentle avatar bounce
+      const bounce = Math.abs(Math.sin(this.speakingPulseTime * 1.2)) * 0.06;
+      this.avatarSprite.position.y = 0.65 + bounce;
+      this.avatarBacking.position.y = 0.65 + bounce;
     }
   }
 
@@ -81,6 +127,7 @@ export class UserAvatar {
    */
   public updateData(newData: UserNode): void {
     const oldDisplayName = this.userData.displayName;
+    const oldActivity = this.userData.activity;
     this.userData = newData;
     this.targetPosition = toThreeVector3(newData.position);
     this.targetRotation = new THREE.Euler(newData.rotation.x, newData.rotation.y, newData.rotation.z);
@@ -92,36 +139,46 @@ export class UserAvatar {
     if (oldDisplayName !== newData.displayName) {
       this.mesh.remove(this.usernameLabel);
       this.usernameLabel = createTextSprite(newData.displayName);
-      this.usernameLabel.position.set(0, 1.5, 0);
+      this.usernameLabel.position.set(0, 1.4, 0);
       this.mesh.add(this.usernameLabel);
+    }
+
+    // Update activity label if changed
+    const oldActivityName = oldActivity?.name;
+    const newActivityName = newData.activity?.name;
+    if (oldActivityName !== newActivityName) {
+      this.updateActivityLabel();
     }
   }
 
   /**
-   * Set speaking state
+   * Set speaking state with visual feedback
    */
   public setSpeaking(speaking: boolean): void {
     if (this.isSpeaking !== speaking) {
       this.isSpeaking = speaking;
-      this.speakingIndicator.visible = speaking;
+      this.speakingRing.visible = speaking;
       this.speakingPulseTime = 0;
 
-      // Add/subtract emissive glow when speaking
-      const body = this.mesh.children.find(child => child instanceof THREE.Mesh && child !== this.speakingIndicator);
-      if (body && body instanceof THREE.Mesh && body.material instanceof THREE.MeshStandardMaterial) {
-        if (speaking) {
-          body.material.emissive.setHex(0x00ff00);
-          body.material.emissiveIntensity = 0.3;
-        } else {
-          body.material.emissive.setHex(0x000000);
-          body.material.emissiveIntensity = 0;
-        }
+      if (!speaking) {
+        // Reset avatar position when done speaking
+        this.avatarSprite.position.y = 0.65;
+        this.avatarBacking.position.y = 0.65;
       }
     }
   }
 
   /**
-   * Update avatar texture
+   * Start despawn animation, call callback when done
+   */
+  public despawn(callback: () => void): void {
+    this.isDespawning = true;
+    this.spawnProgress = 1;
+    this.despawnCallback = callback;
+  }
+
+  /**
+   * Update avatar texture (e.g. when loaded async)
    */
   public setAvatarTexture(texture: THREE.Texture): void {
     if (this.avatarSprite.material instanceof THREE.SpriteMaterial) {
@@ -130,21 +187,14 @@ export class UserAvatar {
     }
   }
 
-  /**
-   * Get current user data
-   */
   public getData(): UserNode {
     return this.userData;
   }
 
-  /**
-   * Dispose of resources
-   */
   public dispose(): void {
-    // Dispose geometries and materials
     this.mesh.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.geometry.dispose();
+      if (child instanceof THREE.Mesh || child instanceof THREE.Sprite) {
+        if ('geometry' in child) child.geometry.dispose();
         if (child.material instanceof THREE.Material) {
           child.material.dispose();
         } else if (Array.isArray(child.material)) {
@@ -155,73 +205,61 @@ export class UserAvatar {
   }
 
   /**
-   * Create the main avatar body (3D representation)
+   * Create the main avatar disc - circular PFP billboard
    */
-  private createAvatarBody(avatarTexture?: THREE.Texture): void {
-    // Body - sphere with user avatar
-    const bodyGeometry = new THREE.SphereGeometry(0.5, 32, 32);
-
-    let bodyMaterial: THREE.Material;
-
-    if (avatarTexture) {
-      bodyMaterial = new THREE.MeshStandardMaterial({
-        map: avatarTexture,
-        roughness: 0.5,
-        metalness: 0.1,
-      });
-    } else {
-      // Create default material with user color
-      const hue = (this.userData.id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % 360) / 360;
-      bodyMaterial = new THREE.MeshStandardMaterial({
-        color: new THREE.Color().setHSL(hue, 0.6, 0.5),
-        roughness: 0.5,
-        metalness: 0.1,
-      });
-    }
-
-    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-    body.position.y = 0.5;
-    body.castShadow = true;
-    this.mesh.add(body);
-
-    // Add 2D avatar sprite facing camera
-    this.createAvatarSprite(avatarTexture);
-
-    // Add a simple "head" above body
-    const headGeometry = new THREE.SphereGeometry(0.25, 16, 16);
-    const headMaterial = new THREE.MeshStandardMaterial({
-      color: 0xffccaa, // Skin tone
-      roughness: 0.6,
+  private createAvatarDisc(avatarTexture?: THREE.Texture): void {
+    // Circular backing disc (soft shadow ring)
+    const backingGeom = new THREE.CircleGeometry(0.52, 32);
+    const backingMat = new THREE.MeshBasicMaterial({
+      color: 0x1a1a2e,
+      transparent: true,
+      opacity: 0.5,
+      side: THREE.DoubleSide,
     });
-    const head = new THREE.Mesh(headGeometry, headMaterial);
-    head.position.y = 1.15;
-    head.castShadow = true;
-    this.mesh.add(head);
+    this.avatarBacking = new THREE.Mesh(backingGeom, backingMat);
+    this.avatarBacking.position.set(0, 0.65, -0.01);
+    this.mesh.add(this.avatarBacking);
+
+    // Avatar sprite (billboard that always faces camera)
+    const texture = avatarTexture || createDefaultAvatarTexture(this.userData.username);
+    const spriteMat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+    });
+    this.avatarSprite = new THREE.Sprite(spriteMat);
+    this.avatarSprite.position.set(0, 0.65, 0);
+    this.avatarSprite.scale.set(1, 1, 1);
+    this.mesh.add(this.avatarSprite);
   }
 
   /**
-   * Create a billboard sprite with avatar image
+   * Update or create activity label
    */
-  private createAvatarSprite(texture?: THREE.Texture): void {
-    let spriteMaterial: THREE.SpriteMaterial;
-
-    if (texture) {
-      spriteMaterial = new THREE.SpriteMaterial({
-        map: texture,
-        transparent: true,
-      });
-    } else {
-      // Use default texture
-      const defaultTexture = createDefaultAvatarTexture(this.userData.username);
-      spriteMaterial = new THREE.SpriteMaterial({
-        map: defaultTexture,
-        transparent: true,
-      });
+  private updateActivityLabel(): void {
+    // Remove old label
+    if (this.activityLabel) {
+      this.mesh.remove(this.activityLabel);
+      this.activityLabel.material.dispose();
+      this.activityLabel = null;
     }
 
-    this.avatarSprite = new THREE.Sprite(spriteMaterial);
-    this.avatarSprite.position.set(0, 1, 0.3);
-    this.avatarSprite.scale.set(0.8, 0.8, 1);
-    this.mesh.add(this.avatarSprite);
+    if (this.userData.activity) {
+      const prefix = this.getActivityPrefix(this.userData.activity.type);
+      const text = `${prefix} ${this.userData.activity.name}`;
+      this.activityLabel = createActivitySprite(text);
+      this.activityLabel.position.set(0, 1.75, 0);
+      this.mesh.add(this.activityLabel);
+    }
+  }
+
+  private getActivityPrefix(type: string): string {
+    switch (type) {
+      case 'PLAYING': return '\u25B6';
+      case 'STREAMING': return '\u25CF';
+      case 'LISTENING': return '\u266B';
+      case 'WATCHING': return '\u25A0';
+      case 'COMPETING': return '\u2694';
+      default: return '\u25B6';
+    }
   }
 }

@@ -46,95 +46,174 @@ export function lerpRotation(
 }
 
 /**
- * Create a sprite with text for user labels
+ * Create a clean text sprite for user labels - rounded pill with soft shadow
  */
 export function createTextSprite(
   text: string,
-  fontSize: number = 32,
+  fontSize: number = 28,
   color: string = '#ffffff',
-  backgroundColor: string = 'rgba(0, 0, 0, 0.6)'
+  backgroundColor: string = 'rgba(30, 30, 50, 0.75)'
 ): THREE.Sprite {
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
   if (!context) {
-    // Fallback to basic sprite if canvas not available
     const material = new THREE.SpriteMaterial({ color: 0xffffff });
     return new THREE.Sprite(material);
   }
 
-  // Set canvas size (power of 2 for better texture performance)
   canvas.width = 512;
-  canvas.height = 128;
+  canvas.height = 96;
 
-  // Draw background
+  // Rounded pill background with soft glow
+  const pillHeight = 56;
+  const pillY = (canvas.height - pillHeight) / 2;
+  const radius = pillHeight / 2;
+
+  // Measure text to size pill
+  context.font = `600 ${fontSize}px "Segoe UI", "SF Pro", Arial, sans-serif`;
+  const textWidth = context.measureText(text).width;
+  const pillWidth = Math.min(textWidth + 40, canvas.width - 20);
+  const pillX = (canvas.width - pillWidth) / 2;
+
+  // Soft shadow
+  context.shadowColor = 'rgba(0, 0, 0, 0.4)';
+  context.shadowBlur = 8;
+  context.shadowOffsetY = 2;
+
+  // Draw pill
   context.fillStyle = backgroundColor;
-  context.roundRect(0, 0, canvas.width, canvas.height, 10);
+  context.beginPath();
+  context.roundRect(pillX, pillY, pillWidth, pillHeight, radius);
   context.fill();
 
+  // Reset shadow for text
+  context.shadowColor = 'transparent';
+  context.shadowBlur = 0;
+  context.shadowOffsetY = 0;
+
   // Draw text
-  context.font = `bold ${fontSize}px Arial, sans-serif`;
   context.fillStyle = color;
   context.textAlign = 'center';
   context.textBaseline = 'middle';
   context.fillText(text, canvas.width / 2, canvas.height / 2);
 
-  // Create texture from canvas
   const texture = new THREE.CanvasTexture(canvas);
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
 
-  // Create sprite
   const material = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
-    depthTest: false, // Always show on top
+    depthTest: false,
   });
 
   const sprite = new THREE.Sprite(material);
-  sprite.scale.set(4, 1, 1);
+  sprite.scale.set(3, 0.56, 1);
 
   return sprite;
 }
 
 /**
- * Create a glowing sphere for speaking indicator
+ * Create an activity label sprite - smaller, muted style
+ */
+export function createActivitySprite(activityText: string): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  if (!context) {
+    const material = new THREE.SpriteMaterial({ color: 0xffffff });
+    return new THREE.Sprite(material);
+  }
+
+  canvas.width = 512;
+  canvas.height = 64;
+
+  context.font = '500 20px "Segoe UI", "SF Pro", Arial, sans-serif';
+  const textWidth = context.measureText(activityText).width;
+  const pillWidth = Math.min(textWidth + 30, canvas.width - 10);
+  const pillHeight = 36;
+  const pillX = (canvas.width - pillWidth) / 2;
+  const pillY = (canvas.height - pillHeight) / 2;
+
+  // Subtle colored pill
+  context.fillStyle = 'rgba(88, 101, 242, 0.6)';
+  context.beginPath();
+  context.roundRect(pillX, pillY, pillWidth, pillHeight, pillHeight / 2);
+  context.fill();
+
+  context.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText(activityText, canvas.width / 2, canvas.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+  });
+
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(2.5, 0.32, 1);
+
+  return sprite;
+}
+
+/**
+ * Create a speaking ring indicator - glowing torus
  */
 export function createSpeakingIndicator(): THREE.Mesh {
-  const geometry = new THREE.SphereGeometry(0.1, 16, 16);
+  const geometry = new THREE.TorusGeometry(0.55, 0.04, 12, 32);
   const material = new THREE.MeshBasicMaterial({
-    color: 0x00ff00,
+    color: 0x43b581, // Discord green
     transparent: true,
     opacity: 0.8,
   });
-  return new THREE.Mesh(geometry, material);
+  const ring = new THREE.Mesh(geometry, material);
+  ring.rotation.x = -Math.PI / 2;
+  return ring;
 }
 
 /**
- * Load an image texture from a URL
+ * Load an image texture from a URL with CORS proxy fallback
  */
 export async function loadTexture(url: string): Promise<THREE.Texture | null> {
-  return new Promise((resolve) => {
-    const loader = new THREE.TextureLoader();
-    loader.load(
-      url,
-      (texture) => {
-        // Enable mipmaps for better quality at distance
-        texture.generateMipmaps = true;
-        texture.minFilter = THREE.LinearMipmapLinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-        resolve(texture);
-      },
-      undefined,
-      (error) => {
-        console.warn(`Failed to load texture from ${url}:`, error);
-        resolve(null);
-      }
-    );
-  });
+  const tryLoad = (loadUrl: string): Promise<THREE.Texture | null> => {
+    return new Promise((resolve) => {
+      const loader = new THREE.TextureLoader();
+      loader.setCrossOrigin('anonymous');
+      loader.load(
+        loadUrl,
+        (texture) => {
+          texture.generateMipmaps = true;
+          texture.minFilter = THREE.LinearMipmapLinearFilter;
+          texture.magFilter = THREE.LinearFilter;
+          resolve(texture);
+        },
+        undefined,
+        () => resolve(null)
+      );
+    });
+  };
+
+  // Try direct URL first
+  let texture = await tryLoad(url);
+  if (texture) return texture;
+
+  // Try with size parameter for Discord CDN
+  if (url.includes('cdn.discordapp.com')) {
+    const sizedUrl = url.includes('?') ? `${url}&size=128` : `${url}?size=128`;
+    texture = await tryLoad(sizedUrl);
+    if (texture) return texture;
+  }
+
+  return null;
 }
 
 /**
- * Create a default avatar texture (colored circle with initials)
+ * Create a default avatar texture - Discord-style colored circle with initials
  */
 export function createDefaultAvatarTexture(username: string): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
@@ -147,13 +226,25 @@ export function createDefaultAvatarTexture(username: string): THREE.CanvasTextur
   canvas.width = 256;
   canvas.height = 256;
 
-  // Generate a consistent color based on username
+  // Generate a consistent pastel color based on username
   const hash = username.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
   const hue = hash % 360;
-  const color = `hsl(${hue}, 60%, 50%)`;
 
-  // Draw circle background
-  context.fillStyle = color;
+  // Soft gradient circle
+  const gradient = context.createRadialGradient(128, 128, 0, 128, 128, 128);
+  gradient.addColorStop(0, `hsl(${hue}, 55%, 65%)`);
+  gradient.addColorStop(1, `hsl(${hue}, 50%, 50%)`);
+
+  context.fillStyle = gradient;
+  context.beginPath();
+  context.arc(128, 128, 120, 0, Math.PI * 2);
+  context.fill();
+
+  // Subtle inner shadow
+  const innerShadow = context.createRadialGradient(128, 100, 60, 128, 128, 120);
+  innerShadow.addColorStop(0, 'rgba(255, 255, 255, 0.15)');
+  innerShadow.addColorStop(1, 'rgba(0, 0, 0, 0.1)');
+  context.fillStyle = innerShadow;
   context.beginPath();
   context.arc(128, 128, 120, 0, Math.PI * 2);
   context.fill();
@@ -167,12 +258,17 @@ export function createDefaultAvatarTexture(username: string): THREE.CanvasTextur
     .slice(0, 2);
 
   context.fillStyle = '#ffffff';
-  context.font = 'bold 96px Arial, sans-serif';
+  context.font = 'bold 88px "Segoe UI", "SF Pro", Arial, sans-serif';
   context.textAlign = 'center';
   context.textBaseline = 'middle';
-  context.fillText(initials, 128, 128);
+  context.shadowColor = 'rgba(0, 0, 0, 0.2)';
+  context.shadowBlur = 4;
+  context.shadowOffsetY = 2;
+  context.fillText(initials || '?', 128, 132);
 
-  return new THREE.CanvasTexture(canvas);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  return texture;
 }
 
 /**

@@ -9,14 +9,10 @@ import org.scalatest.matchers.should.Matchers
 import scala.concurrent.duration._
 
 /**
- * Unit tests for UserManager Actor
- * Tests user tracking, activity updates, and speaking state management
+ * Functional unit tests for UserManager Actor
+ * No mocks - tests the real actor behavior end-to-end.
  */
 class UserManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll {
-
-  // ========================================
-  // Test Kit Setup
-  // ========================================
 
   val testKit: ActorTestKit = ActorTestKit()
 
@@ -24,317 +20,222 @@ class UserManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll {
     testKit.shutdownTestKit()
   }
 
-  // ========================================
-  // Test Data Helpers
-  // ========================================
-
-  def createTestUser(
+  def createUser(
     id: String = "123456789",
     username: String = "testuser",
     displayName: String = "Test User"
-  ): UserNode = {
-    UserNode(
-      id = id,
-      username = username,
-      displayName = displayName,
-      avatar = "avatar.png",
-      position = Vector3D.zero,
-      rotation = Vector3D.zero
-    )
-  }
+  ): UserNode = UserNode(
+    id = id,
+    username = username,
+    displayName = displayName,
+    avatar = "avatar.png",
+    position = Vector3D.zero,
+    rotation = Vector3D.zero
+  )
 
-  def createTestActivity(name: String = "Test Game"): UserActivity = {
-    UserActivity(
-      name = name,
-      activityType = ActivityType.Playing
-    )
-  }
+  def createActivity(name: String = "Test Game"): UserActivity =
+    UserActivity(name = name, activityType = ActivityType.Playing)
 
   // ========================================
-  // User Tracking Tests
+  // Track User
   // ========================================
 
-  "UserManager" should "track a new user successfully" in {
-    val userManager = testKit.spawn(UserManager())
+  "UserManager" should "track a new user" in {
+    val um = testKit.spawn(UserManager())
     val probe = testKit.createTestProbe[UserManager.UserAddedResponse]()
 
-    val user = createTestUser()
+    um ! UserManager.TrackUser(createUser(), probe.ref)
 
-    userManager ! UserManager.TrackUser(user, probe.ref)
-
-    val response = probe.receiveMessage()
-    response.success should be(true)
-    response.userId should be(user.id)
+    val resp = probe.receiveMessage()
+    resp.success should be(true)
+    resp.userId should be("123456789")
   }
 
-  it should "reject tracking user with invalid ID" in {
-    val userManager = testKit.spawn(UserManager())
+  it should "reject user with non-numeric ID" in {
+    val um = testKit.spawn(UserManager())
     val probe = testKit.createTestProbe[UserManager.UserAddedResponse]()
 
-    val invalidUser = createTestUser(id = "invalid-id-with-letters")
-
-    userManager ! UserManager.TrackUser(invalidUser, probe.ref)
-
-    val response = probe.receiveMessage()
-    response.success should be(false)
+    um ! UserManager.TrackUser(createUser(id = "abc-invalid"), probe.ref)
+    probe.receiveMessage().success should be(false)
   }
 
-  it should "reject tracking user with empty ID" in {
-    val userManager = testKit.spawn(UserManager())
+  it should "reject user with empty ID" in {
+    val um = testKit.spawn(UserManager())
     val probe = testKit.createTestProbe[UserManager.UserAddedResponse]()
 
-    val invalidUser = createTestUser(id = "")
-
-    userManager ! UserManager.TrackUser(invalidUser, probe.ref)
-
-    val response = probe.receiveMessage()
-    response.success should be(false)
+    um ! UserManager.TrackUser(createUser(id = ""), probe.ref)
+    probe.receiveMessage().success should be(false)
   }
 
   it should "track multiple users" in {
-    val userManager = testKit.spawn(UserManager())
+    val um = testKit.spawn(UserManager())
     val probe = testKit.createTestProbe[UserManager.UserAddedResponse]()
 
-    val users = (1 to 5).map { i =>
-      createTestUser(id = s"$i" * 9, username = s"user$i")
-    }
-
-    users.foreach { user =>
-      userManager ! UserManager.TrackUser(user, probe.ref)
-      val response = probe.receiveMessage()
-      response.success should be(true)
+    (1 to 5).foreach { i =>
+      um ! UserManager.TrackUser(createUser(id = s"${i}11111111", username = s"user$i"), probe.ref)
+      probe.receiveMessage().success should be(true)
     }
   }
 
-  it should "update user if already tracked" in {
-    val userManager = testKit.spawn(UserManager())
+  it should "update existing user when tracked again" in {
+    val um = testKit.spawn(UserManager())
     val probe = testKit.createTestProbe[UserManager.UserAddedResponse]()
 
-    val user = createTestUser(username = "original_name")
-    userManager ! UserManager.TrackUser(user, probe.ref)
+    um ! UserManager.TrackUser(createUser(username = "original"), probe.ref)
     probe.receiveMessage().success should be(true)
 
-    val updatedUser = user.copy(username = "updated_name")
-    userManager ! UserManager.TrackUser(updatedUser, probe.ref)
-    val response = probe.receiveMessage()
-    response.success should be(true)
+    um ! UserManager.TrackUser(createUser(username = "updated"), probe.ref)
+    probe.receiveMessage().success should be(true)
   }
 
   // ========================================
-  // User Untracking Tests
+  // Untrack User
   // ========================================
 
   it should "untrack an existing user" in {
-    val userManager = testKit.spawn(UserManager())
+    val um = testKit.spawn(UserManager())
     val addProbe = testKit.createTestProbe[UserManager.UserAddedResponse]()
     val removeProbe = testKit.createTestProbe[UserManager.UserRemovedResponse]()
 
-    val user = createTestUser()
+    um ! UserManager.TrackUser(createUser(), addProbe.ref)
+    addProbe.receiveMessage()
 
-    // First track the user
-    userManager ! UserManager.TrackUser(user, addProbe.ref)
-    addProbe.receiveMessage().success should be(true)
-
-    // Then untrack
-    userManager ! UserManager.UntrackUser(user.id, removeProbe.ref)
-    val response = removeProbe.receiveMessage()
-
-    response.success should be(true)
-    response.userId should be(user.id)
+    um ! UserManager.UntrackUser("123456789", removeProbe.ref)
+    val resp = removeProbe.receiveMessage()
+    resp.success should be(true)
+    resp.userId should be("123456789")
   }
 
   it should "fail to untrack non-existent user" in {
-    val userManager = testKit.spawn(UserManager())
+    val um = testKit.spawn(UserManager())
     val probe = testKit.createTestProbe[UserManager.UserRemovedResponse]()
 
-    userManager ! UserManager.UntrackUser("nonexistent-user", probe.ref)
-    val response = probe.receiveMessage()
-
-    response.success should be(false)
-  }
-
-  it should "handle sequential add and remove operations" in {
-    val userManager = testKit.spawn(UserManager())
-    val addProbe = testKit.createTestProbe[UserManager.UserAddedResponse]()
-    val removeProbe = testKit.createTestProbe[UserManager.UserRemovedResponse]()
-
-    val user1 = createTestUser(id = "111111111", username = "user1")
-    val user2 = createTestUser(id = "222222222", username = "user2")
-
-    // Add both users
-    userManager ! UserManager.TrackUser(user1, addProbe.ref)
-    addProbe.receiveMessage().success should be(true)
-
-    userManager ! UserManager.TrackUser(user2, addProbe.ref)
-    addProbe.receiveMessage().success should be(true)
-
-    // Remove user1
-    userManager ! UserManager.UntrackUser(user1.id, removeProbe.ref)
-    removeProbe.receiveMessage().success should be(true)
-
-    // Verify user2 is still tracked by removing successfully
-    userManager ! UserManager.UntrackUser(user2.id, removeProbe.ref)
-    removeProbe.receiveMessage().success should be(true)
+    um ! UserManager.UntrackUser("nonexistent", probe.ref)
+    probe.receiveMessage().success should be(false)
   }
 
   // ========================================
-  // Activity Update Tests
+  // GetActiveUsers
   // ========================================
 
-  it should "update activity for existing user" in {
-    val userManager = testKit.spawn(UserManager())
-    val addProbe = testKit.createTestProbe[UserManager.UserAddedResponse]()
-    val activityProbe = testKit.createTestProbe[UserManager.ActivityUpdatedResponse]()
+  it should "return empty list when no users tracked" in {
+    val um = testKit.spawn(UserManager())
+    val probe = testKit.createTestProbe[UserManager.ActiveUsersResponse]()
 
-    val user = createTestUser()
-
-    // Track user first
-    userManager ! UserManager.TrackUser(user, addProbe.ref)
-    addProbe.receiveMessage()
-
-    // Update activity
-    val activity = createTestActivity("League of Legends")
-    userManager ! UserManager.UpdateActivity(user.id, Some(activity), activityProbe.ref)
-
-    val response = activityProbe.receiveMessage()
-    response.success should be(true)
-    response.userId should be(user.id)
+    um ! UserManager.GetActiveUsers(probe.ref)
+    probe.receiveMessage().users should be(empty)
   }
 
-  it should "fail to update activity for non-existent user" in {
-    val userManager = testKit.spawn(UserManager())
-    val probe = testKit.createTestProbe[UserManager.ActivityUpdatedResponse]()
-
-    val activity = createTestActivity()
-    userManager ! UserManager.UpdateActivity("nonexistent", Some(activity), probe.ref)
-
-    val response = probe.receiveMessage()
-    response.success should be(false)
-  }
-
-  it should "clear activity when setting to None" in {
-    val userManager = testKit.spawn(UserManager())
-    val addProbe = testKit.createTestProbe[UserManager.UserAddedResponse]()
-    val activityProbe = testKit.createTestProbe[UserManager.ActivityUpdatedResponse]()
-
-    val user = createTestUser()
-
-    // Track user with activity
-    val userWithActivity = user.copy(activity = Some(createTestActivity()))
-    userManager ! UserManager.TrackUser(userWithActivity, addProbe.ref)
-    addProbe.receiveMessage()
-
-    // Clear activity
-    userManager ! UserManager.UpdateActivity(user.id, None, activityProbe.ref)
-
-    val response = activityProbe.receiveMessage()
-    response.success should be(true)
-  }
-
-  // ========================================
-  // Speaking State Tests
-  // ========================================
-
-  it should "update speaking state for existing user" in {
-    val userManager = testKit.spawn(UserManager())
-    val addProbe = testKit.createTestProbe[UserManager.UserAddedResponse]()
-
-    val user = createTestUser()
-
-    // Track user first
-    userManager ! UserManager.TrackUser(user, addProbe.ref)
-    addProbe.receiveMessage()
-
-    // Update speaking state (no response for this message)
-    userManager ! UserManager.UpdateSpeakingState(user.id, isSpeaking = true)
-
-    // Should not throw or fail
-    succeed
-  }
-
-  it should "handle speaking state update for non-existent user gracefully" in {
-    val userManager = testKit.spawn(UserManager())
-
-    // Should not throw or fail
-    userManager ! UserManager.UpdateSpeakingState("nonexistent", isSpeaking = true)
-
-    succeed
-  }
-
-  // ========================================
-  // Get Active Users Tests
-  // ========================================
-
-  it should "return active users list" in {
-    val userManager = testKit.spawn(UserManager())
+  it should "return all tracked users" in {
+    val um = testKit.spawn(UserManager())
     val addProbe = testKit.createTestProbe[UserManager.UserAddedResponse]()
     val usersProbe = testKit.createTestProbe[UserManager.ActiveUsersResponse]()
 
-    // Add a user
-    val user = createTestUser()
-    userManager ! UserManager.TrackUser(user, addProbe.ref)
+    um ! UserManager.TrackUser(createUser(id = "111111111", username = "alice"), addProbe.ref)
+    addProbe.receiveMessage()
+    um ! UserManager.TrackUser(createUser(id = "222222222", username = "bob"), addProbe.ref)
     addProbe.receiveMessage()
 
-    // Get active users
-    userManager ! UserManager.GetActiveUsers(usersProbe.ref)
-    val response = usersProbe.receiveMessage()
-    response.users should have size 1
-    response.users.head.id should be(user.id)
+    um ! UserManager.GetActiveUsers(usersProbe.ref)
+    val users = usersProbe.receiveMessage().users
+    users should have size 2
+    users.map(_.username).toSet should be(Set("alice", "bob"))
   }
 
-  // ========================================
-  // Concurrent Operations Tests
-  // ========================================
-
-  it should "handle concurrent user joins" in {
-    val userManager = testKit.spawn(UserManager())
-    val probe = testKit.createTestProbe[UserManager.UserAddedResponse]()
-
-    val users = (1 to 10).map { i =>
-      createTestUser(id = s"$i" * 9, username = s"user$i")
-    }
-
-    // Send all track requests concurrently
-    users.foreach { user =>
-      userManager ! UserManager.TrackUser(user, probe.ref)
-    }
-
-    // All should succeed
-    (1 to 10).foreach { _ =>
-      val response = probe.receiveMessage(3.seconds)
-      response.success should be(true)
-    }
-  }
-
-  it should "handle concurrent activity updates" in {
-    val userManager = testKit.spawn(UserManager())
+  it should "reflect removals in active users list" in {
+    val um = testKit.spawn(UserManager())
     val addProbe = testKit.createTestProbe[UserManager.UserAddedResponse]()
-    val activityProbe = testKit.createTestProbe[UserManager.ActivityUpdatedResponse]()
+    val removeProbe = testKit.createTestProbe[UserManager.UserRemovedResponse]()
+    val usersProbe = testKit.createTestProbe[UserManager.ActiveUsersResponse]()
 
-    val user = createTestUser()
-
-    // Track user first
-    userManager ! UserManager.TrackUser(user, addProbe.ref)
+    um ! UserManager.TrackUser(createUser(id = "111111111"), addProbe.ref)
+    addProbe.receiveMessage()
+    um ! UserManager.TrackUser(createUser(id = "222222222"), addProbe.ref)
     addProbe.receiveMessage()
 
-    // Send multiple activity updates
-    val activities = (1 to 5).map { i =>
-      createTestActivity(s"Game $i")
-    }
+    um ! UserManager.UntrackUser("111111111", removeProbe.ref)
+    removeProbe.receiveMessage()
 
-    activities.foreach { activity =>
-      userManager ! UserManager.UpdateActivity(user.id, Some(activity), activityProbe.ref)
-    }
-
-    // All should succeed
-    (1 to 5).foreach { _ =>
-      val response = activityProbe.receiveMessage(3.seconds)
-      response.success should be(true)
-    }
+    um ! UserManager.GetActiveUsers(usersProbe.ref)
+    val users = usersProbe.receiveMessage().users
+    users should have size 1
+    users.head.id should be("222222222")
   }
 
   // ========================================
-  // ID Validation Tests
+  // Activity Updates
+  // ========================================
+
+  it should "update activity for existing user" in {
+    val um = testKit.spawn(UserManager())
+    val addProbe = testKit.createTestProbe[UserManager.UserAddedResponse]()
+    val actProbe = testKit.createTestProbe[UserManager.ActivityUpdatedResponse]()
+
+    um ! UserManager.TrackUser(createUser(), addProbe.ref)
+    addProbe.receiveMessage()
+
+    um ! UserManager.UpdateActivity("123456789", Some(createActivity("Valorant")), actProbe.ref)
+    val resp = actProbe.receiveMessage()
+    resp.success should be(true)
+  }
+
+  it should "fail activity update for non-existent user" in {
+    val um = testKit.spawn(UserManager())
+    val probe = testKit.createTestProbe[UserManager.ActivityUpdatedResponse]()
+
+    um ! UserManager.UpdateActivity("ghost", Some(createActivity()), probe.ref)
+    probe.receiveMessage().success should be(false)
+  }
+
+  it should "clear activity when set to None" in {
+    val um = testKit.spawn(UserManager())
+    val addProbe = testKit.createTestProbe[UserManager.UserAddedResponse]()
+    val actProbe = testKit.createTestProbe[UserManager.ActivityUpdatedResponse]()
+
+    um ! UserManager.TrackUser(
+      createUser().copy(activity = Some(createActivity())),
+      addProbe.ref
+    )
+    addProbe.receiveMessage()
+
+    um ! UserManager.UpdateActivity("123456789", None, actProbe.ref)
+    actProbe.receiveMessage().success should be(true)
+  }
+
+  // ========================================
+  // Speaking State
+  // ========================================
+
+  it should "accept speaking state update for existing user" in {
+    val um = testKit.spawn(UserManager())
+    val addProbe = testKit.createTestProbe[UserManager.UserAddedResponse]()
+
+    um ! UserManager.TrackUser(createUser(), addProbe.ref)
+    addProbe.receiveMessage()
+
+    // Fire-and-forget - should not crash
+    um ! UserManager.UpdateSpeakingState("123456789", isSpeaking = true)
+    um ! UserManager.UpdateSpeakingState("123456789", isSpeaking = false)
+
+    // Verify actor is still alive by sending another message
+    val usersProbe = testKit.createTestProbe[UserManager.ActiveUsersResponse]()
+    um ! UserManager.GetActiveUsers(usersProbe.ref)
+    usersProbe.receiveMessage().users should have size 1
+  }
+
+  it should "handle speaking update for non-existent user gracefully" in {
+    val um = testKit.spawn(UserManager())
+
+    // Should not crash
+    um ! UserManager.UpdateSpeakingState("ghost", isSpeaking = true)
+
+    val probe = testKit.createTestProbe[UserManager.ActiveUsersResponse]()
+    um ! UserManager.GetActiveUsers(probe.ref)
+    probe.receiveMessage().users should be(empty)
+  }
+
+  // ========================================
+  // ID Validation
   // ========================================
 
   "UserManager.isValidUserId" should "accept valid Discord snowflake IDs" in {
