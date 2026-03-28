@@ -18,7 +18,7 @@ object UserManager extends LazyLogging {
   final case class UntrackUser(userId: String, replyTo: ActorRef[UserRemovedResponse]) extends Command
   final case class UpdateActivity(userId: String, activity: Option[UserActivity], replyTo: ActorRef[ActivityUpdatedResponse]) extends Command
   final case class UpdateSpeakingState(userId: String, isSpeaking: Boolean) extends Command
-  final case object GetActiveUsers extends Command
+  final case class GetActiveUsers(replyTo: ActorRef[ActiveUsersResponse]) extends Command
 
   final case class UserAddedResponse(success: Boolean, userId: String)
   final case class UserRemovedResponse(success: Boolean, userId: String)
@@ -45,7 +45,6 @@ class UserManager(context: ActorContext[UserManager.Command])
   private var users: immutable.Seq[UserNode] = immutable.Seq.empty
 
   override def onMessage(msg: Command): Behavior[Command] = {
-    logger.debug(s"UserManager received: $msg")
     msg match {
       case TrackUser(user, replyTo) =>
         handleTrackUser(user, replyTo)
@@ -55,8 +54,8 @@ class UserManager(context: ActorContext[UserManager.Command])
         handleUpdateActivity(userId, activity, replyTo)
       case UpdateSpeakingState(userId, isSpeaking) =>
         handleUpdateSpeakingState(userId, isSpeaking)
-      case GetActiveUsers =>
-        handleGetActiveUsers()
+      case GetActiveUsers(replyTo) =>
+        handleGetActiveUsers(replyTo)
     }
     this
   }
@@ -122,9 +121,9 @@ class UserManager(context: ActorContext[UserManager.Command])
     }
   }
 
-  private def handleGetActiveUsers(): Unit = {
-    // Sender is implicit in Akka Typed - we'd use ask pattern in real usage
-    logger.debug(s"Current active users: ${users.size}")
+  private def handleGetActiveUsers(replyTo: ActorRef[ActiveUsersResponse]): Unit = {
+    logger.debug(s"Returning active users: ${users.size}")
+    replyTo ! ActiveUsersResponse(users)
   }
 
   private def updateUser(user: UserNode): Unit = {
@@ -132,19 +131,4 @@ class UserManager(context: ActorContext[UserManager.Command])
       if (existingUser.id == user.id) user else existingUser
     }
   }
-
-  /**
-   * Get current users (for internal use by RoomActor)
-   */
-  def getCurrentUsers: immutable.Seq[UserNode] = users
-
-  /**
-   * Find user by ID
-   */
-  def findUser(userId: String): Option[UserNode] = users.find(_.id == userId)
-
-  /**
-   * Check if user exists
-   */
-  def hasUser(userId: String): Boolean = users.exists(_.id == userId)
 }

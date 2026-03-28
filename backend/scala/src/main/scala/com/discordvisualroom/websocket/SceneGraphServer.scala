@@ -1,26 +1,28 @@
 package com.discordvisualroom.websocket
 
+import akka.Done
+import akka.NotUsed
 import akka.actor.typed.{ActorRef, ActorSystem}
+import akka.actor.typed.scaladsl.{Behaviors, ActorContext}
 import akka.actor.typed.scaladsl.AskPattern._
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage}
-import akka.http.scaladsl.model.{StatusCodes, HttpResponse}
+import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
-import akka.stream.scaladsl.{Flow, Sink, Source}
-import akka.stream.typed.scaladsl.{ActorSink, ActorSource}
+import akka.stream.scaladsl.{Flow, Sink, Source, BroadcastHub, Keep, MergeHub}
+import akka.stream.{CompletionStrategy, OverflowStrategy}
+import akka.util.Timeout
 import com.discordvisualroom.actors.RoomActor
-import com.discordvisualroom.model.SceneGraph
-import com.discordvisualroom.serialization.JsonSerializers._
+import com.discordvisualroom.model._
+import com.discordvisualroom.serialization.JsonSerializers
 import com.typesafe.scalalogging.LazyLogging
 
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util.{Failure, Success}
 
 /**
  * WebSocket server for streaming SceneGraph updates to frontend clients
- * Uses Akka Streams for efficient bidirectional communication
  */
 object SceneGraphServer extends LazyLogging {
 
@@ -37,163 +39,103 @@ object SceneGraphServer extends LazyLogging {
 
     val route = createRoute(roomActor)
 
-    val bindingFuture = Http()
+    Http()
       .newServerAt(host, port)
       .bind(route)
-
-    bindingFuture.onComplete {
-      case Success(binding) =>
-        val address = binding.localAddress
-        logger.info(s"WebSocket server online at ws://${address.getHostString}:${address.getPort}")
-
-      case Failure(ex) =>
-        logger.error("Failed to bind WebSocket server", ex)
-        system.terminate()
-    }
-
-    bindingFuture
   }
 
   /**
-   * Create HTTP route with WebSocket endpoint
+   * Create HTTP route with WebSocket endpoint and CORS
    */
-  private def createRoute(roomActor: ActorRef[RoomActor.Command]): Route = {
-    path("ws") {
-      get {
-        handleWebSocketMessages(handleWebSocket(roomActor))
-      }
-    } ~
-    path("health") {
-      get {
-        complete(StatusCodes.OK, "OK")
-      }
-    } ~
-    path("scene") {
-      get {
-        // REST endpoint for current scene (for polling fallback)
-        onSuccess(getCurrentScene(roomActor)) { sceneGraph =>
-          complete(StatusCodes.OK, writeSceneGraph(sceneGraph))
+  private def createRoute(roomActor: ActorRef[RoomActor.Command])(implicit system: ActorSystem[Nothing]): Route = {
+    // CORS headers for frontend
+    respondWithHeaders(
+      akka.http.scaladsl.model.headers.`Access-Control-Allow-Origin`.*,
+      akka.http.scaladsl.model.headers.`Access-Control-Allow-Methods`(
+        akka.http.scaladsl.model.HttpMethods.GET,
+        akka.http.scaladsl.model.HttpMethods.OPTIONS
+      )
+    ) {
+      path("ws") {
+        get {
+          handleWebSocketMessages(createWebSocketFlow(roomActor))
+        }
+      } ~
+      path("health") {
+        get {
+          complete(StatusCodes.OK, "OK")
+        }
+      } ~
+      path("scene") {
+        get {
+          implicit val timeout: Timeout = 3.seconds
+          val sceneFuture = roomActor.ask(ref => RoomActor.GetCurrentSceneGraph(ref))
+          onSuccess(sceneFuture) { sceneUpdate =>
+            val json = wrapSceneUpdateMessage(sceneUpdate.sceneGraph)
+            complete(StatusCodes.OK, json)
+          }
         }
       }
     }
   }
 
   /**
-   * Handle WebSocket connection flow
+   * Create a WebSocket flow for a single client connection.
+   *
+   * Uses an ActorRef-based Source to push scene updates to the client.
+   * The actor subscribes to the RoomActor for scene updates.
    */
-  private def handleWebSocket(
+  private def createWebSocketFlow(
     roomActor: ActorRef[RoomActor.Command]
-  )(implicit system: ActorSystem[Nothing], ec: ExecutionContext): Flow[Message, Message, Any] = {
+  )(implicit system: ActorSystem[Nothing]): Flow[Message, Message, Any] = {
 
-    // Create a unique client actor for this connection
-    val clientActor = system.systemActorOf(
-      WebSocketClientActor.behavior(roomActor),
-      s"ws-client-${java.util.UUID.randomUUID()}"
-    )
+    // Create an actor-backed source that will push messages to the WebSocket
+    val (outActor, outSource) = Source
+      .actorRef[RoomActor.SceneGraphUpdate](
+        completionMatcher = PartialFunction.empty,
+        failureMatcher = PartialFunction.empty,
+        bufferSize = 64,
+        overflowStrategy = OverflowStrategy.dropHead
+      )
+      .preMaterialize()
 
-    // Incoming messages from client -> actor
-    val incoming: Sink[Message, Future[Done]] =
-      Sink.foreach[Message] {
-        case TextMessage.Strict(text) =>
-          logger.debug(s"Received WebSocket message: $text")
-          // Handle client messages if needed (e.g., ping/pong, commands)
-          clientActor ! WebSocketClientActor.HandleClientMessage(text)
+    // Subscribe this client's output actor to room updates
+    roomActor ! RoomActor.SubscribeToSceneUpdates(outActor)
 
-        case TextMessage.Streamed(textStream) =>
-          textStream.runFold("")(_ + _).foreach { text =>
-            logger.debug(s"Received streamed WebSocket message: $text")
-            clientActor ! WebSocketClientActor.HandleClientMessage(text)
-          }
+    // Convert SceneGraphUpdate to WebSocket TextMessage with proper envelope
+    val outMessages: Source[Message, NotUsed] = outSource.map { sceneUpdate =>
+      val json = wrapSceneUpdateMessage(sceneUpdate.sceneGraph)
+      TextMessage.Strict(json): Message
+    }
 
-        case _ =>
-          logger.debug("Received binary WebSocket message (ignoring)")
-      }
+    // Incoming messages from client (we mostly ignore these in dumb-renderer arch)
+    val inSink: Sink[Message, Future[Done]] = Sink.foreach[Message] {
+      case TextMessage.Strict(text) =>
+        logger.debug(s"Received client message: $text")
+      case TextMessage.Streamed(textStream) =>
+        textStream.runFold("")(_ + _).foreach { text =>
+          logger.debug(s"Received streamed client message: $text")
+        }(system.executionContext)
+      case _ =>
+        logger.debug("Received binary message (ignoring)")
+    }.mapMaterializedValue { future =>
+      // When client disconnects, unsubscribe
+      future.onComplete { _ =>
+        logger.info("WebSocket client disconnected, unsubscribing")
+        roomActor ! RoomActor.UnsubscribeFromSceneUpdates(outActor)
+      }(system.executionContext)
+      future
+    }
 
-    // Outgoing messages from actor -> client
-    val outgoing: Source[Message, NotUsed] =
-      ActorSource.actorRef[SceneGraph](
-        completionMatcher = {
-          case WebSocketClientActor.StreamComplete => StatusCodes.Success
-        },
-        failureMatcher = {
-          case WebSocketClientActor.StreamFailed(ex) => StatusCodes.ServerError
-        },
-        bufferSize = 100,
-        overflowStrategy = akka.stream.OverflowStrategy.dropHead
-      ).map(sceneGraph => TextMessage.Strict(writeSceneGraph(sceneGraph)))
-
-    Flow.fromSinkAndSource(incoming, outgoing)
+    Flow.fromSinkAndSource(inSink, outMessages)
   }
 
   /**
-   * Get current scene graph via ask pattern
+   * Wrap a SceneGraph in the WebSocket message envelope the frontend expects:
+   * {"type": "SCENE_UPDATE", "timestamp": ..., "payload": {...}}
    */
-  private def getCurrentScene(
-    roomActor: ActorRef[RoomActor.Command]
-  )(implicit system: ActorSystem[Nothing], timeout: Timeout = 3.seconds): Future[SceneGraph] = {
-
-    import RoomActor._
-
-    roomActor.ask(replyTo => GetCurrentSceneGraph).map {
-      case sceneUpdate: SceneGraphUpdate => sceneUpdate.sceneGraph
-      case _ =>
-        // Return empty scene if something goes wrong
-        SceneGraph.create(
-          users = Seq.empty,
-          furniture = Seq.empty,
-          room = com.discordvisualroom.model.RoomConfig(
-            id = "unknown",
-            name = "Unknown",
-            dimensions = com.discordvisualroom.model.RoomDimensions(10, 3, 10),
-            maxUsers = 10
-          )
-        )
-    }
+  private def wrapSceneUpdateMessage(sceneGraph: SceneGraph): String = {
+    val sceneJson = JsonSerializers.writeSceneGraph(sceneGraph)
+    s"""{"type":"SCENE_UPDATE","timestamp":${System.currentTimeMillis()},"payload":$sceneJson}"""
   }
-}
-
-/**
- * WebSocket client actor - handles per-connection state
- */
-object WebSocketClientActor extends LazyLogging {
-  sealed trait Command
-  case class HandleClientMessage(message: String) extends Command
-  case class NewSceneGraph(sceneGraph: SceneGraph) extends Command
-  case object StreamComplete extends Command
-  case class StreamFailed(ex: Throwable) extends Command
-
-  def behavior(
-    roomActor: ActorRef[RoomActor.Command]
-  ): akka.actor.typed.Behavior[Command] =
-    akka.actor.typed.scaladsl.Behaviors.setup { context =>
-      // Subscribe to room updates
-      roomActor ! RoomActor.SubscribeToSceneUpdates(context.self)
-
-      akka.actor.typed.scaladsl.Behaviors.receiveMessage {
-        case HandleClientMessage(message) =>
-          // Handle incoming messages from client
-          logger.debug(s"Client message: $message")
-          akka.actor.typed.scaladsl.Behaviors.same
-
-        case NewSceneGraph(sceneGraph) =>
-          // Forward scene graph to stream
-          context.self ! sceneGraph
-          akka.actor.typed.scaladsl.Behaviors.same
-
-        case SceneGraphUpdate =>
-          // This would be handled by the actor source
-          akka.actor.typed.scaladsl.Behaviors.same
-
-        case StreamComplete =>
-          // Unsubscribe from room updates
-          roomActor ! RoomActor.UnsubscribeFromSceneUpdates(context.self)
-          logger.info("WebSocket stream completed")
-          akka.actor.typed.scaladsl.Behaviors.stopped
-
-        case StreamFailed(ex) =>
-          roomActor ! RoomActor.UnsubscribeFromSceneUpdates(context.self)
-          logger.error("WebSocket stream failed", ex)
-          akka.actor.typed.scaladsl.Behaviors.stopped
-      }
-    }
 }

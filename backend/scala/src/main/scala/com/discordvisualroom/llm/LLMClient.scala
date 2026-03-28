@@ -2,9 +2,10 @@ package com.discordvisualroom.llm
 
 import com.discordvisualroom.model._
 import com.typesafe.scalalogging.LazyLogging
-import sttp.client3._
-import sttp.client3.asynchttpclient.future.AsyncHttpClientFutureBackend
 
+import java.net.URI
+import java.net.http.{HttpClient, HttpRequest, HttpResponse}
+import java.time.Duration
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
 
@@ -12,10 +13,11 @@ import scala.util.{Failure, Success, Try}
  * LLM Client for communicating with llama.cpp server
  * Includes graceful fallback to deterministic layouts
  */
-class LLMClient(config: LLMConfig)(implicit ec: ExecutionContext)
-  extends LazyLogging {
+class LLMClient(config: LLMConfig) extends LazyLogging {
 
-  private val backend: SttpBackend[Future, _] = AsyncHttpClientFutureBackend()
+  private val httpClient: HttpClient = HttpClient.newBuilder()
+    .connectTimeout(Duration.ofMillis(config.timeoutMs.toLong))
+    .build()
 
   /**
    * Generate furniture layout using LLM with fallback
@@ -24,7 +26,7 @@ class LLMClient(config: LLMConfig)(implicit ec: ExecutionContext)
   def generateFurnitureLayout(
     users: Seq[UserNode],
     roomConfig: RoomConfig
-  ): Future[Either[Seq[FurnitureAssignment], Seq[FurnitureAssignment]]] = {
+  )(implicit ec: ExecutionContext): Future[Either[Seq[FurnitureAssignment], Seq[FurnitureAssignment]]] = {
 
     if (users.isEmpty) {
       logger.info("No users, returning empty layout")
@@ -33,68 +35,78 @@ class LLMClient(config: LLMConfig)(implicit ec: ExecutionContext)
 
     logger.info(s"Requesting LLM layout for ${users.size} users")
 
-    val request = buildLLMRequest(users, roomConfig)
+    val prompt = buildLLMPrompt(users, roomConfig)
+    val requestBody = buildRequestJson(prompt)
 
-    // Try LLM with timeout
-    val llmResponse = try {
-      val basicRequest = basicRequest
-        .post(uri"${config.baseUrl}/completion")
-        .body(request)
-        .timeout(config.timeoutMs)
-        .response(asStringAlways)
+    Future {
+      try {
+        val request = HttpRequest.newBuilder()
+          .uri(URI.create(s"${config.baseUrl}/completion"))
+          .header("Content-Type", "application/json")
+          .timeout(Duration.ofMillis(config.timeoutMs.toLong))
+          .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+          .build()
 
-      basicRequest.send(backend)
-    } catch {
-      case ex: Exception =>
-        logger.error("LLM request failed", ex)
-        return Future.successful(Left(LayoutGenerator.generateSmartFallbackLayout(users)))
-    }
+        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
 
-    llmResponse.map { response =>
-      parseLLMResponse(response.body, users)
-    }.recover {
-      case ex: Exception =>
-        logger.error("Failed to parse LLM response", ex)
-        Left(LayoutGenerator.generateSmartFallbackLayout(users))
+        if (response.statusCode() >= 200 && response.statusCode() < 300) {
+          parseLLMResponse(response.body(), users)
+        } else {
+          logger.warn(s"LLM returned HTTP ${response.statusCode()}")
+          Left(LayoutGenerator.generateSmartFallbackLayout(users))
+        }
+      } catch {
+        case ex: Exception =>
+          logger.error(s"LLM request failed: ${ex.getMessage}")
+          Left(LayoutGenerator.generateSmartFallbackLayout(users))
+      }
     }
   }
 
   /**
-   * Build LLM prompt request
+   * Build the JSON request body for llama.cpp /completion endpoint
    */
-  private def buildLLMRequest(users: Seq[UserNode], roomConfig: RoomConfig): String = {
+  private def buildRequestJson(prompt: String): String = {
+    val escapedPrompt = prompt
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+      .replace("\n", "\\n")
+      .replace("\r", "\\r")
+      .replace("\t", "\\t")
+
+    s"""{"prompt": "$escapedPrompt", "n_predict": 2048, "temperature": 0.3, "top_p": 0.9, "stop": ["</s>"]}"""
+  }
+
+  /**
+   * Build LLM prompt
+   */
+  private def buildLLMPrompt(users: Seq[UserNode], roomConfig: RoomConfig): String = {
     val usersJson = users.map { user =>
-      s"""{"id": "${user.id}", "username": "${user.username}", "activity": ${user.activity.map(a =>
+      val activityJson = user.activity.map(a =>
         s"""{"name": "${a.name}", "type": "${a.activityType.typeName}"}"""
-      ).getOrElse("null")}}"""
+      ).getOrElse("null")
+      s"""{"id": "${user.id}", "username": "${user.username}", "activity": $activityJson}"""
     }.mkString("[", ", ", "]")
 
-    val validFurniture = FurnitureType.allValues.map(_.typeName).mkString(", ")
-
     s"""You are a furniture layout assistant. Given these users and their activities, assign ONE furniture type from the EXACT list below to each user.
-       |
-       |VALID FURNITURE TYPES (use ONLY these):
-       |- COMPUTER_DESK: For competitive gaming
-       |- COUCH_2_SEATER: For casual co-op games
-       |- COUCH_SINGLE: For solo/AFK users
-       |- BAR_STOOL: For mobile/handheld games
-       |
-       |Users and activities:
-       |$usersJson
-       |
-       |Room capacity: ${roomConfig.maxUsers}
-       |Available furniture: $validFurniture
-       |
-       |Return ONLY valid JSON array of assignments (no markdown, no extra text):
-       |[{"userId": "...", "furniture": "COMPUTER_DESK"}, ...]
-       |
-       |IMPORTANT: Only use the exact furniture types listed above. Do not invent new types.
-       |""".stripMargin
+
+VALID FURNITURE TYPES (use ONLY these):
+- COMPUTER_DESK: For competitive gaming
+- COUCH_2_SEATER: For casual co-op games
+- COUCH_SINGLE: For solo/AFK users
+- BAR_STOOL: For mobile/handheld games
+
+Users and activities:
+$usersJson
+
+Return ONLY valid JSON array of assignments (no markdown, no extra text):
+[{"userId": "...", "furniture": "COMPUTER_DESK"}, ...]
+
+IMPORTANT: Only use the exact furniture types listed above. Do not invent new types."""
   }
 
   /**
    * Parse LLM response and validate
-   * Returns Left(fallback) if validation fails, Right(valid_assignments) if successful
    */
   private def parseLLMResponse(
     response: String,
@@ -103,10 +115,10 @@ class LLMClient(config: LLMConfig)(implicit ec: ExecutionContext)
 
     logger.debug(s"LLM response: $response")
 
-    // Extract JSON from response (handle markdown code blocks)
-    val jsonContent = extractJson(response)
+    // Extract content field from llama.cpp response JSON
+    val content = extractContentFromResponse(response)
+    val jsonContent = extractJson(content)
 
-    // Parse JSON
     val assignmentsTry = Try {
       import org.json4s._
       import org.json4s.jackson.JsonMethods._
@@ -125,11 +137,23 @@ class LLMClient(config: LLMConfig)(implicit ec: ExecutionContext)
     assignmentsTry match {
       case Success(assignments) =>
         validateAssignments(assignments, users)
-
       case Failure(ex) =>
         logger.warn(s"Failed to parse LLM JSON response: ${ex.getMessage}")
         Left(LayoutGenerator.generateSmartFallbackLayout(users))
     }
+  }
+
+  /**
+   * Extract the "content" field from llama.cpp JSON response
+   */
+  private def extractContentFromResponse(response: String): String = {
+    Try {
+      import org.json4s._
+      import org.json4s.jackson.JsonMethods._
+      implicit val formats: Formats = DefaultFormats
+      val json = parse(response)
+      (json \ "content").extract[String]
+    }.getOrElse(response) // If not JSON, treat whole response as content
   }
 
   /**
@@ -142,13 +166,15 @@ class LLMClient(config: LLMConfig)(implicit ec: ExecutionContext)
     val codeBlockRegex = """```(?:json)?\s*([\s\S]*?)\s*```""".r
     trimmed match {
       case codeBlockRegex(json) => json.trim
-      case _ => trimmed
+      case _ =>
+        // Try to find a JSON array in the response
+        val arrayRegex = """\[\s*\{.*\}\s*\]""".r
+        arrayRegex.findFirstIn(trimmed).getOrElse(trimmed)
     }
   }
 
   /**
    * Validate furniture assignments
-   * Ensures all user IDs exist and furniture types are valid
    */
   private def validateAssignments(
     assignments: Seq[FurnitureAssignment],
@@ -156,23 +182,17 @@ class LLMClient(config: LLMConfig)(implicit ec: ExecutionContext)
   ): Either[Seq[FurnitureAssignment], Seq[FurnitureAssignment]] = {
 
     val userIds = users.map(_.id).toSet
-
     val errors = scala.collection.mutable.ArrayBuffer[String]()
 
-    // Check each assignment
     assignments.foreach { assignment =>
-      // Validate user ID exists
       if (!userIds.contains(assignment.userId)) {
-        errors += s"Unknown user ID: ${assignment.userId}")
+        errors += s"Unknown user ID: ${assignment.userId}"
       }
-
-      // Validate furniture type
       if (FurnitureType.fromString(assignment.furniture).isEmpty) {
-        errors += s"Invalid furniture type: ${assignment.furniture}")
+        errors += s"Invalid furniture type: ${assignment.furniture}"
       }
     }
 
-    // Check all users are assigned
     val assignedUserIds = assignments.map(_.userId).toSet
     val missingUsers = userIds -- assignedUserIds
     if (missingUsers.nonEmpty) {
@@ -196,19 +216,14 @@ class LLMClient(config: LLMConfig)(implicit ec: ExecutionContext)
     users: Seq[UserNode]
   ): Seq[FurnitureAssignment] = {
 
-    logger.info("Sanitizing and completing LLM assignments")
-
-    // Keep valid assignments
     val validAssignments = assignments.filter { assignment =>
       FurnitureType.fromString(assignment.furniture).isDefined &&
         users.exists(_.id == assignment.userId)
     }
 
-    // Find users without assignments
     val assignedUserIds = validAssignments.map(_.userId).toSet
     val unassignedUsers = users.filterNot(u => assignedUserIds.contains(u.id))
 
-    // Generate fallback for unassigned users
     val fallbackAssignments = unassignedUsers.map { user =>
       val furnitureType = user.activity match {
         case Some(activity) if activity.activityType == ActivityType.Playing =>
@@ -216,31 +231,17 @@ class LLMClient(config: LLMConfig)(implicit ec: ExecutionContext)
         case _ =>
           FurnitureType.CouchSingle.typeName
       }
-
-      FurnitureAssignment(
-        userId = user.id,
-        furniture = furnitureType
-      )
+      FurnitureAssignment(userId = user.id, furniture = furnitureType)
     }
 
     validAssignments ++ fallbackAssignments
   }
-
-  /**
-   * Close the HTTP client
-   */
-  def close(): Unit = {
-    Try(backend.close()).getOrElse(
-      logger.warn("Failed to close HTTP backend")
-    )
-  }
 }
 
 object LLMClient {
-  def apply(config: LLMConfig)(implicit ec: ExecutionContext): LLMClient =
-    new LLMClient(config)
+  def apply(config: LLMConfig): LLMClient = new LLMClient(config)
 
-  def apply()(implicit ec: ExecutionContext): LLMClient = {
+  def apply(): LLMClient = {
     val config = LLMConfig(
       baseUrl = "http://192.168.68.62:1234",
       timeoutMs = 5000,

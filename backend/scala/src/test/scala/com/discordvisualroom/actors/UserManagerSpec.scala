@@ -265,13 +265,21 @@ class UserManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll {
   // Get Active Users Tests
   // ========================================
 
-  it should "handle GetActiveUsers message" in {
+  it should "return active users list" in {
     val userManager = testKit.spawn(UserManager())
+    val addProbe = testKit.createTestProbe[UserManager.UserAddedResponse]()
+    val usersProbe = testKit.createTestProbe[UserManager.ActiveUsersResponse]()
 
-    // Should not throw
-    userManager ! UserManager.GetActiveUsers
+    // Add a user
+    val user = createTestUser()
+    userManager ! UserManager.TrackUser(user, addProbe.ref)
+    addProbe.receiveMessage()
 
-    succeed
+    // Get active users
+    userManager ! UserManager.GetActiveUsers(usersProbe.ref)
+    val response = usersProbe.receiveMessage()
+    response.users should have size 1
+    response.users.head.id should be(user.id)
   }
 
   // ========================================
