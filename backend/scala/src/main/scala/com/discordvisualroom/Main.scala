@@ -2,9 +2,8 @@ package com.discordvisualroom
 
 import akka.actor.typed.ActorSystem
 import akka.actor.typed.scaladsl.Behaviors
-import akka.util.Timeout
 import com.discordvisualroom.actors.RoomActor
-import com.discordvisualroom.discord.{DiscordBot, DiscordBotConfig}
+import com.discordvisualroom.discord.DiscordBot
 import com.discordvisualroom.model._
 import com.discordvisualroom.websocket.SceneGraphServer
 import com.typesafe.scalalogging.LazyLogging
@@ -12,7 +11,7 @@ import com.typesafe.scalalogging.LazyLogging
 import scala.concurrent.ExecutionContextExecutor
 import scala.concurrent.duration._
 import scala.io.StdIn
-import scala.util.{Failure, Success, Try}
+import scala.util.{Failure, Success}
 
 /**
  * Main entry point for Discord Visual Room backend
@@ -32,9 +31,9 @@ object Main extends LazyLogging {
     implicit val system: ActorSystem[Nothing] = ActorSystem(Behaviors.empty, "discord-visual-room")
     implicit val ec: ExecutionContextExecutor = system.executionContext
 
-    // Create RoomActor
+    // Create RoomActor with LLM config
     val roomActor = system.systemActorOf(
-      RoomActor(),
+      RoomActor(config.llm),
       "room-actor"
     )
 
@@ -125,9 +124,12 @@ object Main extends LazyLogging {
   /**
    * Initialize room with configuration
    */
-  private def initializeRoom(config: AppConfig, roomActor: akka.actor.typed.ActorRef[RoomActor.Command]): Unit = {
-    implicit val timeout: Timeout = 5.seconds
+  private def initializeRoom(
+    config: AppConfig,
+    roomActor: akka.actor.typed.ActorRef[RoomActor.Command]
+  )(implicit system: ActorSystem[Nothing], ec: ExecutionContextExecutor): Unit = {
     import akka.actor.typed.scaladsl.AskPattern._
+    implicit val timeout: akka.util.Timeout = 5.seconds
 
     logger.info(s"Initializing room: ${config.room.name}")
 
@@ -136,10 +138,8 @@ object Main extends LazyLogging {
     initFuture.onComplete {
       case Success(RoomActor.InitializationResponse(true, message)) =>
         logger.info(s"Room initialized: $message")
-
       case Success(RoomActor.InitializationResponse(false, message)) =>
         logger.error(s"Failed to initialize room: $message")
-
       case Failure(ex) =>
         logger.error("Failed to initialize room", ex)
     }
@@ -166,7 +166,6 @@ object Main extends LazyLogging {
         val address = binding.localAddress
         logger.info(s"WebSocket server bound to ${address.getHostString}:${address.getPort}")
         logger.info(s"WebSocket endpoint: ws://${address.getHostString}:${address.getPort}/ws")
-
       case Failure(ex) =>
         logger.error("Failed to bind WebSocket server", ex)
         system.terminate()
@@ -193,7 +192,6 @@ object Main extends LazyLogging {
     botFuture.onComplete {
       case Success(_) =>
         logger.info("Discord bot started successfully")
-
       case Failure(ex) =>
         logger.error("Failed to start Discord bot", ex)
         logger.warn("Continuing without Discord bot integration...")
@@ -207,53 +205,6 @@ object Main extends LazyLogging {
     sys.addShutdownHook {
       logger.info("Shutdown hook triggered")
       system.terminate()
-      logger.info("Actor system terminated")
     }
-  }
-}
-
-/**
- * Development runner with optional arguments
- */
-object DevRunner extends LazyLogging {
-
-  def main(args: Array[String]): Unit = {
-    // Set development defaults if not in environment
-    if (sys.env.get("DISCORD_TOKEN").isEmpty) {
-      logger.warn("DISCORD_TOKEN not set, using dummy token for testing")
-      sys.props.put("DISCORD_TOKEN", "dummy-token-for-testing")
-    }
-
-    if (sys.env.get("VOICE_CHANNEL_ID").isEmpty) {
-      logger.warn("VOICE_CHANNEL_ID not set, using dummy ID for testing")
-      sys.props.put("VOICE_CHANNEL_ID", "123456789")
-    }
-
-    if (sys.env.get("GUILD_ID").isEmpty) {
-      logger.warn("GUILD_ID not set, using dummy ID for testing")
-      sys.props.put("GUILD_ID", "987654321")
-    }
-
-    // Run main application
-    Main.main(args)
-  }
-}
-
-/**
- * Test runner for local development without Discord
- */
-object TestRunner extends LazyLogging {
-
-  def main(args: Array[String]): Unit = {
-    logger.info("Running in test mode (no Discord integration)")
-
-    // Set test configuration
-    sys.props.put("DISCORD_TOKEN", "test-token")
-    sys.props.put("VOICE_CHANNEL_ID", "test-channel")
-    sys.props.put("GUILD_ID", "test-guild")
-    sys.props.put("WS_HOST", "localhost")
-    sys.props.put("WS_PORT", "8080")
-
-    Main.main(args)
   }
 }

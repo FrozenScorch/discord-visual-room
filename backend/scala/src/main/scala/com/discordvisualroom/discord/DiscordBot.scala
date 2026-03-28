@@ -1,23 +1,23 @@
 package com.discordvisualroom.discord
 
+import akka.actor.typed.ActorRef
 import com.discordvisualroom.actors.RoomActor
 import com.discordvisualroom.model._
 import com.typesafe.scalalogging.LazyLogging
 import discord4j.common.util.Snowflake
 import discord4j.core.{DiscordClient, DiscordClientBuilder}
 import discord4j.core.`object`.entity.{Member, User}
-import discord4j.core.`object`.entity.channel.GuildMessageChannel
 import discord4j.core.`object`.presence.{Activity, Presence}
 import discord4j.core.event.domain.VoiceStateUpdateEvent
 import discord4j.core.event.domain.lifecycle.ReadyEvent
-import discord4j.core.event.domain.message.MessageCreateEvent
 
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 import scala.util.{Failure, Success, Try}
 
 /**
- * Discord bot integration using discorde4j
+ * Discord bot integration using discord4j
  * Listens to voice channel events and tracks user activities
  */
 object DiscordBot extends LazyLogging {
@@ -29,24 +29,31 @@ object DiscordBot extends LazyLogging {
     token: String,
     voiceChannelId: String,
     guildId: String,
-    roomActor: RoomActor.Command
-  )(implicit ec: ExecutionContext): Future[DiscordClient] = {
+    roomActor: ActorRef[RoomActor.Command]
+  )(implicit ec: ExecutionContext): Future[Unit] = {
 
     logger.info("Starting Discord bot...")
 
-    val client = DiscordClientBuilder.create(token).build()
+    val promise = Promise[Unit]()
 
-    // Login and register event handlers
-    client.login().flatMap { gateway =>
+    try {
+      val client = DiscordClientBuilder.create(token).build()
+
+      val gateway = client.login().block()
+      if (gateway == null) {
+        promise.failure(new RuntimeException("Failed to connect to Discord gateway"))
+        return promise.future
+      }
+
       logger.info("Discord bot connected successfully")
 
-      // Event dispatcher
       val eventDispatcher = gateway.getEventDispatcher
 
       // Handle ready event
       eventDispatcher.on(classOf[ReadyEvent]).subscribe { event =>
         val self = event.getSelf
         logger.info(s"Bot logged in as: ${self.getUsername}#${self.getDiscriminator}")
+        promise.trySuccess(())
       }
 
       // Handle voice state updates (users joining/leaving voice channel)
@@ -57,7 +64,18 @@ object DiscordBot extends LazyLogging {
       // Initial sync of users in voice channel
       syncInitialVoiceState(gateway, voiceChannelId, guildId, roomActor)
 
-      Future.successful(client)
+      // Ensure promise completes even if ReadyEvent was already fired
+      Future {
+        Thread.sleep(5000)
+        promise.trySuccess(())
+      }
+
+      promise.future
+    } catch {
+      case ex: Exception =>
+        logger.error("Failed to start Discord bot", ex)
+        promise.tryFailure(ex)
+        promise.future
     }
   }
 
@@ -68,69 +86,67 @@ object DiscordBot extends LazyLogging {
     event: VoiceStateUpdateEvent,
     targetVoiceChannelId: String,
     guildId: String,
-    roomActor: RoomActor.Command
+    roomActor: ActorRef[RoomActor.Command]
   ): Unit = {
 
-    val oldState = event.getOld
-    val newState = event.getCurrent
+    Try {
+      val newState = event.getCurrent
+      val oldState = event.getOld
 
-    val voiceChannelId = newState.getChannelId.map(_.asString()).orElse(oldState.flatMap(_.getChannelId.map(_.asString())))
+      val newChannelId = newState.getChannelId.toScala.map(_.asString())
+      val oldChannelId = oldState.toScala.flatMap(_.getChannelId.toScala.map(_.asString()))
 
-    // Check if event is for our target voice channel
-    if (voiceChannelId.contains(targetVoiceChannelId)) {
       val userId = newState.getUserId.asString()
-      val member = newState.getMember
 
-      if (newState.getChannelId.map(_.asString()).contains(targetVoiceChannelId)) {
-        // User joined the voice channel
-        logger.info(s"User joined voice channel: $userId")
-        member.flatMap(_.toFuture).foreach { m =>
-          handleUserJoined(m, roomActor)
+      // User joined our target channel
+      if (newChannelId.contains(targetVoiceChannelId) && !oldChannelId.contains(targetVoiceChannelId)) {
+        logger.info(s"User $userId joined voice channel $targetVoiceChannelId")
+        Try {
+          val member = newState.getMember.block()
+          if (member != null) {
+            handleUserJoined(member, roomActor)
+          }
+        }.recover {
+          case ex: Exception =>
+            logger.error(s"Failed to get member for user $userId", ex)
         }
-      } else {
-        // User left the voice channel
-        logger.info(s"User left voice channel: $userId")
-        handleUserLeft(userId, roomActor)
       }
+      // User left our target channel
+      else if (oldChannelId.contains(targetVoiceChannelId) && !newChannelId.contains(targetVoiceChannelId)) {
+        logger.info(s"User $userId left voice channel $targetVoiceChannelId")
+        roomActor ! RoomActor.UserLeft(userId)
+      }
+    }.recover {
+      case ex: Exception =>
+        logger.error("Error handling voice state update", ex)
     }
   }
 
   /**
    * Handle user joining voice channel
    */
-  private def handleUserJoined(member: Member, roomActor: RoomActor.Command): Unit = {
-    val user = member.getUser
-    val userId = user.getId.asString()
+  private def handleUserJoined(member: Member, roomActor: ActorRef[RoomActor.Command]): Unit = {
+    Try {
+      val userId = member.getId.asString()
+      val username = member.getUsername
+      val displayName = member.getDisplayName
+      val avatarUrl = member.getAvatarUrl
 
-    val userNode = UserNode(
-      id = userId,
-      username = user.getUsername,
-      displayName = member.getDisplayName,
-      avatar = user.getAvatarUrl(s"https://cdn.discordapp.com/avatars/$userId/%s.png"),
-      position = Vector3D(0, 0, 0),
-      rotation = Vector3D(0, 0, 0),
-      activity = extractActivity(member),
-      isSpeaking = false
-    )
+      val userNode = UserNode(
+        id = userId,
+        username = username,
+        displayName = displayName,
+        avatar = avatarUrl,
+        position = Vector3D(0, 0, 0),
+        rotation = Vector3D(0, 0, 0),
+        activity = extractActivity(member),
+        isSpeaking = false
+      )
 
-    // Send to RoomActor
-    roomActor match {
-      case actorRef: akka.actor.typed.ActorRef[_] =>
-        actorRef.asInstanceOf[akka.actor.typed.ActorRef[RoomActor.Command]] ! RoomActor.UserJoined(userNode, null)
-      case _ =>
-        logger.warn("RoomActor is not an ActorRef, cannot send message")
-    }
-  }
-
-  /**
-   * Handle user leaving voice channel
-   */
-  private def handleUserLeft(userId: String, roomActor: RoomActor.Command): Unit = {
-    roomActor match {
-      case actorRef: akka.actor.typed.ActorRef[_] =>
-        actorRef.asInstanceOf[akka.actor.typed.ActorRef[RoomActor.Command]] ! RoomActor.UserLeft(userId, null)
-      case _ =>
-        logger.warn("RoomActor is not an ActorRef, cannot send message")
+      roomActor ! RoomActor.UserJoined(userNode)
+    }.recover {
+      case ex: Exception =>
+        logger.error(s"Failed to create UserNode for member", ex)
     }
   }
 
@@ -138,25 +154,20 @@ object DiscordBot extends LazyLogging {
    * Extract user activity from Discord presence
    */
   private def extractActivity(member: Member): Option[UserActivity] = {
-    Try(member.getPresence.block()).toOption.flatMap { presence =>
-      presence match {
-        case Presence.ONLINE =>
-          val activity = member.getActivities
-          if (!activity.isEmpty) {
-            val discordActivity = activity.get(0)
-            Some(UserActivity(
-              name = discordActivity.getName,
-              activityType = mapActivityType(discordActivity.getType),
-              details = Option(discordActivity.getDetails).map(_.toString),
-              state = Option(discordActivity.getState).map(_.toString)
-            ))
-          } else {
-            None
-          }
-        case _ =>
-          None
+    Try {
+      val presence = member.getPresence.block()
+      if (presence == null) return None
+
+      val activities = presence.getActivities.asScala
+      activities.headOption.map { discordActivity =>
+        UserActivity(
+          name = discordActivity.getName,
+          activityType = mapActivityType(discordActivity.getType),
+          details = Option(discordActivity.getDetails).flatMap(d => Option(d.toString)),
+          state = Option(discordActivity.getState).flatMap(s => Option(s.toString))
+        )
       }
-    }
+    }.getOrElse(None)
   }
 
   /**
@@ -169,7 +180,7 @@ object DiscordBot extends LazyLogging {
       case Activity.Type.LISTENING => ActivityType.Listening
       case Activity.Type.WATCHING => ActivityType.Watching
       case Activity.Type.COMPETING => ActivityType.Competing
-      case _ => ActivityType.Playing // Default
+      case _ => ActivityType.Playing
     }
   }
 
@@ -180,68 +191,45 @@ object DiscordBot extends LazyLogging {
     gateway: discord4j.gateway.GatewayDiscordClient,
     voiceChannelId: String,
     guildId: String,
-    roomActor: RoomActor.Command
+    roomActor: ActorRef[RoomActor.Command]
   ): Unit = {
 
     logger.info("Syncing initial voice state...")
 
     Try {
       val guild = gateway.getGuildById(Snowflake.of(guildId)).block()
-      val voiceChannel = guild.getChannelById(Snowflake.of(voiceChannelId)).block()
+      if (guild == null) {
+        logger.error(s"Could not find guild: $guildId")
+        return
+      }
 
-      voiceChannel.asVoiceChannel().flatMap { vc =>
-        vc.getVoiceStates.flatMap(_.toFuture())
-      }.foreach { voiceStates =>
-        logger.info(s"Found ${voiceStates.size()} users in voice channel")
+      val voiceStates = guild.getVoiceStates.collectList().block()
+      if (voiceStates == null) {
+        logger.warn("No voice states found")
+        return
+      }
 
-        voiceStates.asScala.foreach { voiceState =>
-          val memberFuture = voiceState.getMember.toFuture()
-          memberFuture.foreach { member =>
+      val channelUsers = voiceStates.asScala.filter { vs =>
+        vs.getChannelId.toScala.map(_.asString()).contains(voiceChannelId)
+      }
+
+      logger.info(s"Found ${channelUsers.size} users in voice channel $voiceChannelId")
+
+      channelUsers.foreach { voiceState =>
+        Try {
+          val member = voiceState.getMember.block()
+          if (member != null) {
             handleUserJoined(member, roomActor)
           }
+        }.recover {
+          case ex: Exception =>
+            logger.error(s"Failed to sync member", ex)
         }
       }
     }.recover {
       case ex: Exception =>
         logger.error("Failed to sync initial voice state", ex)
     }
-  }
-
-  /**
-   * Activity monitoring service
-   * Periodically polls for activity changes
-   */
-  def startActivityMonitoring(
-    gateway: discord4j.gateway.GatewayDiscordClient,
-    guildId: String,
-    voiceChannelId: String,
-    roomActor: RoomActor.Command
-  )(implicit ec: ExecutionContext): Future[_] = {
-
-    import scala.concurrent.duration._
-
-    // Check for activity changes every 30 seconds
-    Future {
-      Thread.sleep(30000)
-      syncInitialVoiceState(gateway, voiceChannelId, guildId, roomActor)
-    }
-  }
-
-  /**
-   * Listen for activity change events
-   */
-  def listenToActivityChanges(
-    client: DiscordClient,
-    voiceChannelId: String,
-    roomActor: RoomActor.Command
-  )(implicit ec: ExecutionContext): Unit = {
-
-    client.getEventDispatcher.on(classOf[MessageCreateEvent])
-      .subscribe { event =>
-        // Could trigger activity updates on messages if needed
-        val userId = event.getMessage.getAuthor.map(_.getId.asString())
-        logger.debug(s"Message from user: $userId")
-      }
   }
 }
 
@@ -254,34 +242,3 @@ case class DiscordBotConfig(
   guildId: String,
   commandPrefix: String = "!"
 )
-
-/**
- * Actor-based wrapper for Discord bot
- */
-class DiscordBotActor(
-  config: DiscordBotConfig,
-  roomActor: akka.actor.typed.ActorRef[RoomActor.Command]
-) extends LazyLogging {
-
-  private var client: Option[DiscordClient] = None
-
-  def start()(implicit ec: ExecutionContext): Future[Unit] = {
-    logger.info("Starting Discord bot actor...")
-
-    DiscordBot.start(
-      token = config.token,
-      voiceChannelId = config.voiceChannelId,
-      guildId = config.guildId,
-      roomActor = roomActor
-    ).map { discordClient =>
-      client = Some(discordClient)
-      logger.info("Discord bot actor started successfully")
-    }
-  }
-
-  def stop(): Unit = {
-    logger.info("Stopping Discord bot actor...")
-    client.foreach(_.logout().subscribe())
-    client = None
-  }
-}

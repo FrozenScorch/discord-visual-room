@@ -37,8 +37,7 @@ libraryDependencies ++= Seq(
   "org.json4s" %% "json4s-jackson" % Json4sVersion,
   "org.json4s" %% "json4s-ext" % Json4sVersion,
 
-  // HTTP client for LLM
-  "com.softwaremill.sttp.client3" %% "core" % "3.9.0",
+  // HTTP client for LLM (uses java.net.http built-in)
 
   // Configuration
   "com.typesafe" % "config" % "1.4.3",
@@ -46,7 +45,8 @@ libraryDependencies ++= Seq(
   // Testing
   "com.typesafe.akka" %% "akka-actor-testkit-typed" % AkkaVersion % Test,
   "com.typesafe.akka" %% "akka-stream-testkit" % AkkaVersion % Test,
-  "org.scalatest" %% "scalatest" % "3.2.17" % Test
+  "org.scalatest" %% "scalatest" % "3.2.17" % Test,
+  "org.scalatestplus" %% "scalacheck-1-17" % "3.2.17.0" % Test
 )
 
 // Compiler options

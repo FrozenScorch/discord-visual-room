@@ -14,10 +14,10 @@ import { toThreeVector3, loadTexture } from './utils/sceneUtils';
  * - Updates scene based on incoming SCENE_UPDATE messages
  */
 export class SceneRenderer {
-  private scene: THREE.Scene;
-  private camera: THREE.PerspectiveCamera;
-  private renderer: THREE.WebGLRenderer;
-  private controls: OrbitControls;
+  private scene!: THREE.Scene;
+  private camera!: THREE.PerspectiveCamera;
+  private renderer!: THREE.WebGLRenderer;
+  private controls!: OrbitControls;
 
   // Scene objects tracked by ID
   private furnitureObjects: Map<string, THREE.Object3D> = new Map();
@@ -36,6 +36,9 @@ export class SceneRenderer {
 
   // Container
   private container: HTMLElement;
+
+  // Bound resize handler (stored for proper removal)
+  private boundHandleResize: () => void;
 
   constructor(container: HTMLElement, config: Partial<RendererConfig> = {}) {
     this.container = container;
@@ -63,8 +66,16 @@ export class SceneRenderer {
     // Start render loop
     this.startRenderLoop();
 
-    // Handle window resize
-    window.addEventListener('resize', this.handleResize.bind(this));
+    // Handle window resize (store bound ref for proper cleanup)
+    this.boundHandleResize = this.handleResize.bind(this);
+    window.addEventListener('resize', this.boundHandleResize);
+
+    // Dismiss loading overlay
+    const loadingOverlay = document.getElementById('loading-overlay');
+    if (loadingOverlay) {
+      loadingOverlay.classList.add('loaded');
+      document.body.classList.add('scene-loaded');
+    }
   }
 
   /**
@@ -132,7 +143,7 @@ export class SceneRenderer {
     this.renderer.dispose();
 
     // Remove resize listener
-    window.removeEventListener('resize', this.handleResize.bind(this));
+    window.removeEventListener('resize', this.boundHandleResize);
   }
 
   /**
@@ -295,7 +306,7 @@ export class SceneRenderer {
 
       if (!furnitureMesh) {
         // Create new furniture
-        furnitureMesh = FurnitureFactory.getMesh(furniture.type);
+        furnitureMesh = FurnitureFactory.getMesh(furniture.type) ?? undefined;
         if (!furnitureMesh) {
           console.error(`Unknown furniture type: ${furniture.type}`);
           return;
@@ -370,23 +381,29 @@ export class SceneRenderer {
     }
 
     // Update or create users
-    userList.forEach(async (user) => {
+    userList.forEach((user) => {
       let avatar = this.userAvatars.get(user.id);
 
       if (!avatar) {
-        // Load avatar texture
-        let avatarTexture = this.avatarTextures.get(user.id);
-        if (!avatarTexture && user.avatar) {
-          avatarTexture = await loadTexture(user.avatar);
-          if (avatarTexture) {
-            this.avatarTextures.set(user.id, avatarTexture);
-          }
-        }
-
-        // Create new avatar
-        avatar = new UserAvatar(user, avatarTexture);
+        // Create avatar immediately with cached texture or default
+        const cachedTexture = this.avatarTextures.get(user.id);
+        avatar = new UserAvatar(user, cachedTexture);
         this.scene.add(avatar.mesh);
         this.userAvatars.set(user.id, avatar);
+
+        // Load avatar texture asynchronously if not cached
+        if (!cachedTexture && user.avatar) {
+          loadTexture(user.avatar).then((texture) => {
+            if (texture) {
+              this.avatarTextures.set(user.id, texture);
+              // Update the avatar if it still exists
+              const existingAvatar = this.userAvatars.get(user.id);
+              if (existingAvatar) {
+                existingAvatar.setAvatarTexture(texture);
+              }
+            }
+          });
+        }
       } else {
         // Update existing avatar
         avatar.updateData(user);

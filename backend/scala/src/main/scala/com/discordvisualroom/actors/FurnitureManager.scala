@@ -8,7 +8,6 @@ import com.typesafe.scalalogging.LazyLogging
 
 import java.util.UUID
 import scala.concurrent.ExecutionContextExecutor
-import scala.concurrent.duration._
 import scala.util.{Failure, Success}
 
 /**
@@ -33,6 +32,14 @@ object FurnitureManager extends LazyLogging {
   final case class UserLeft(userId: String, replyTo: ActorRef[FurnitureReleasedResponse]) extends Command
   final case object ClearAllFurniture extends Command
 
+  // Internal
+  private[actors] final case class ApplyLayout(
+    assignments: Seq[FurnitureAssignment],
+    users: Seq[UserNode],
+    replyTo: ActorRef[LayoutGeneratedResponse],
+    usedFallback: Boolean
+  ) extends Command
+
   final case class LayoutGeneratedResponse(
     success: Boolean,
     furniture: Seq[FurnitureNode],
@@ -55,24 +62,24 @@ class FurnitureManager(
   import FurnitureManager._
 
   private implicit val ec: ExecutionContextExecutor = context.executionContext
-  private implicit val scheduler: Scheduler = context.system.scheduler
 
   // Current furniture in the room
   private var furniture: Seq[FurnitureNode] = Seq.empty
 
   override def onMessage(msg: Command): Behavior[Command] = {
-    logger.debug(s"FurnitureManager received: ${msg.getClass.getSimpleName}")
     msg match {
       case GenerateLayout(users, roomConfig, replyTo) =>
         handleGenerateLayout(users, roomConfig, replyTo)
+      case ApplyLayout(assignments, users, replyTo, usedFallback) =>
+        handleApplyLayout(assignments, users, replyTo, usedFallback)
       case AssignFurniture(assignments, replyTo) =>
         handleAssignFurniture(assignments, replyTo)
       case GetFurniture(replyTo) =>
-        handleGetFurniture(replyTo)
+        replyTo ! CurrentFurnitureResponse(furniture)
       case UserLeft(userId, replyTo) =>
         handleUserLeft(userId, replyTo)
       case ClearAllFurniture =>
-        handleClearAll()
+        furniture = Seq.empty
     }
     this
   }
@@ -95,41 +102,31 @@ class FurnitureManager(
     val layoutFuture = llmClient.generateFurnitureLayout(users, roomConfig)
 
     context.pipeToSelf(layoutFuture) {
-      case Success(result) =>
-        result match {
-          case Right(assignments) =>
-            logger.info(s"LLM generated ${assignments.size} furniture assignments")
-            ApplyValidatedLayout(assignments, replyTo, usedFallback = false)
-          case Left(fallbackAssignments) =>
-            logger.warn("LLM failed or returned invalid response, using fallback layout")
-            ApplyValidatedLayout(fallbackAssignments, replyTo, usedFallback = true)
-        }
+      case Success(Right(assignments)) =>
+        logger.info(s"LLM generated ${assignments.size} furniture assignments")
+        ApplyLayout(assignments, users, replyTo, usedFallback = false)
+      case Success(Left(fallbackAssignments)) =>
+        logger.warn("LLM failed or returned invalid response, using fallback layout")
+        ApplyLayout(fallbackAssignments, users, replyTo, usedFallback = true)
       case Failure(ex) =>
         logger.error("LLM request failed, using fallback layout", ex)
-        val fallbackAssignments = LayoutGenerator.generateLinearLayout(users.size)
-        ApplyValidatedLayout(fallbackAssignments, replyTo, usedFallback = true)
+        val fallbackAssignments = LayoutGenerator.generateSmartFallbackLayout(users)
+        ApplyLayout(fallbackAssignments, users, replyTo, usedFallback = true)
     }
   }
 
-  // Internal message to apply layout
-  private case class ApplyValidatedLayout(
+  private def handleApplyLayout(
     assignments: Seq[FurnitureAssignment],
+    users: Seq[UserNode],
     replyTo: ActorRef[LayoutGeneratedResponse],
     usedFallback: Boolean
-  ) extends Command
-
-  private def handleAssignFurniture(
-    assignments: Seq[FurnitureAssignment],
-    replyTo: ActorRef[FurnitureAssignedResponse]
   ): Unit = {
-    logger.info(s"Assigning ${assignments.size} furniture pieces")
-
     furniture = assignments.zipWithIndex.map { case (assignment, index) =>
       val position = calculatePosition(index, assignments.size)
-      val furnitureType = FurnitureType.unsafeFromString(assignment.furniture)
+      val furnitureType = FurnitureType.fromString(assignment.furniture).getOrElse(FurnitureType.ComputerDesk)
 
       FurnitureNode(
-        id = s"furniture-${UUID.randomUUID().toString}",
+        id = s"furniture-${UUID.randomUUID().toString.take(8)}",
         furnitureType = furnitureType,
         position = position,
         rotation = Vector3D(0, 0, 0),
@@ -141,68 +138,69 @@ class FurnitureManager(
       )
     }
 
-    logger.info(s"Created ${furniture.size} furniture nodes")
-    replyTo ! FurnitureAssignedResponse(success = true, furniture.size)
+    logger.info(s"Applied layout: ${furniture.size} furniture nodes (fallback=$usedFallback)")
+    replyTo ! LayoutGeneratedResponse(success = true, furniture = furniture, usedFallback = usedFallback)
   }
 
-  private def handleGetFurniture(replyTo: ActorRef[CurrentFurnitureResponse]): Unit = {
-    replyTo ! CurrentFurnitureResponse(furniture)
+  private def handleAssignFurniture(
+    assignments: Seq[FurnitureAssignment],
+    replyTo: ActorRef[FurnitureAssignedResponse]
+  ): Unit = {
+    furniture = assignments.zipWithIndex.map { case (assignment, index) =>
+      val position = calculatePosition(index, assignments.size)
+      val furnitureType = FurnitureType.fromString(assignment.furniture).getOrElse(FurnitureType.ComputerDesk)
+
+      FurnitureNode(
+        id = s"furniture-${UUID.randomUUID().toString.take(8)}",
+        furnitureType = furnitureType,
+        position = position,
+        rotation = Vector3D(0, 0, 0),
+        assignedUserId = Some(assignment.userId),
+        capacity = furnitureType match {
+          case FurnitureType.Couch2Seater => 2
+          case _ => 1
+        }
+      )
+    }
+
+    replyTo ! FurnitureAssignedResponse(success = true, furniture.size)
   }
 
   private def handleUserLeft(userId: String, replyTo: ActorRef[FurnitureReleasedResponse]): Unit = {
     val originalSize = furniture.size
-    furniture = furniture.map { f =>
+    // Remove furniture assigned to the leaving user (single-occupancy)
+    // Unassign from multi-occupancy
+    furniture = furniture.flatMap { f =>
       if (f.assignedUserId.contains(userId)) {
-        f.unassignUser
+        if (f.capacity > 1) {
+          Some(f.unassignUser) // Keep multi-seat furniture
+        } else {
+          None // Remove single-seat furniture
+        }
       } else {
-        f
+        Some(f)
       }
-    }.filterNot(f => f.assignedUserId.isEmpty && f.capacity == 1) // Remove unassigned single-occupancy furniture
+    }
 
     val removedCount = originalSize - furniture.size
-    logger.info(s"User $userId left, removed $removedCount unassigned furniture pieces")
+    logger.info(s"User $userId left, removed $removedCount furniture pieces")
     replyTo ! FurnitureReleasedResponse(success = true)
   }
 
-  private def handleClearAll(): Unit = {
-    logger.info("Clearing all furniture")
-    furniture = Seq.empty
-  }
-
   /**
-   * Calculate position for furniture in a grid layout
+   * Calculate position for furniture in a circular layout
    */
   private def calculatePosition(index: Int, total: Int): Vector3D = {
-    val gridSize = math.ceil(math.sqrt(total)).toInt
-    val spacing = 3.0 // meters between furniture
-    val row = index / gridSize
-    val col = index % gridSize
+    if (total == 1) {
+      return Vector3D(0, 0, 0)
+    }
 
-    // Center the grid
-    val offsetX = (gridSize - 1) * spacing / 2.0
-    val offsetZ = (gridSize - 1) * spacing / 2.0
-
+    val radius = math.max(3.0, total * 1.2)
+    val angle = (2 * math.Pi * index) / total
     Vector3D(
-      x = col * spacing - offsetX,
-      y = 0, // Ground level
-      z = row * spacing - offsetZ
+      x = math.cos(angle) * radius,
+      y = 0,
+      z = math.sin(angle) * radius
     )
   }
-
-  /**
-   * Get current furniture (for internal use by RoomActor)
-   */
-  def getCurrentFurniture: Seq[FurnitureNode] = furniture
-
-  /**
-   * Find furniture by user assignment
-   */
-  def findFurnitureByUser(userId: String): Option[FurnitureNode] =
-    furniture.find(_.assignedUserId.contains(userId))
-
-  /**
-   * Find furniture by ID
-   */
-  def findFurnitureById(furnitureId: String): Option[FurnitureNode] =
-    furniture.find(_.id == furnitureId)
 }

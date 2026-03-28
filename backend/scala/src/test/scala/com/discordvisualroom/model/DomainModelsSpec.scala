@@ -291,7 +291,7 @@ class DomainModelsSpec extends AnyFlatSpec with Matchers with ScalaCheckDrivenPr
   "FurnitureAssignment" should "have valid furniture type" in {
     val validFurnitureGen = Gen.oneOf(FurnitureType.allValues.map(_.typeName))
 
-    forAll(Gen.uuid.str, validFurnitureGen) { (userId, furniture) =>
+    forAll(Gen.uuid.map(_.toString), validFurnitureGen) { (userId, furniture) =>
       val assignment = FurnitureAssignment(userId, furniture)
       assignment.userId should not be empty
       FurnitureType.fromString(assignment.furniture).isDefined shouldBe true

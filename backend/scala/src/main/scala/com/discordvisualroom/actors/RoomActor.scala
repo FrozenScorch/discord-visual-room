@@ -1,11 +1,14 @@
 package com.discordvisualroom.actors
 
-import akka.actor.typed.{ActorRef, Behavior, PostStop, PreRestart, SupervisorStrategy}
-import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors, Routers}
+import akka.actor.typed.{ActorRef, Behavior, SupervisorStrategy}
+import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
 import com.discordvisualroom.model._
+import com.discordvisualroom.llm.{LLMClient, LayoutGenerator}
 import com.typesafe.scalalogging.LazyLogging
 
 import scala.collection.immutable
+import scala.concurrent.ExecutionContextExecutor
+import scala.util.{Failure, Success}
 
 /**
  * RoomActor - Main room state manager
@@ -19,82 +22,71 @@ object RoomActor extends LazyLogging {
   final case class Initialize(config: RoomConfig, replyTo: ActorRef[InitializationResponse]) extends Command
 
   // User management
-  final case class UserJoined(user: UserNode, replyTo: ActorRef[UserOperationResponse]) extends Command
-  final case class UserLeft(userId: String, replyTo: ActorRef[UserOperationResponse]) extends Command
+  final case class UserJoined(user: UserNode) extends Command
+  final case class UserLeft(userId: String) extends Command
   final case class UserActivityChanged(userId: String, activity: Option[UserActivity]) extends Command
   final case class UserSpeakingChanged(userId: String, isSpeaking: Boolean) extends Command
 
   // Scene graph queries
-  final case object GetCurrentSceneGraph extends Command
+  final case class GetCurrentSceneGraph(replyTo: ActorRef[SceneGraphUpdate]) extends Command
   final case class SubscribeToSceneUpdates(subscriber: ActorRef[SceneGraphUpdate]) extends Command
   final case class UnsubscribeFromSceneUpdates(subscriber: ActorRef[SceneGraphUpdate]) extends Command
 
   // Internal messages
-  private final case class LayoutCompleted(success: Boolean) extends Command
-  private final case class NotifySubscribers() extends Command
+  private[actors] final case class UsersSnapshot(users: immutable.Seq[UserNode]) extends Command
+  private[actors] final case class FurnitureSnapshot(furniture: immutable.Seq[FurnitureNode]) extends Command
+  private[actors] final case class LayoutCompleted(success: Boolean) extends Command
+  private[actors] final case object NotifySubscribers extends Command
 
   // Response types
   final case class InitializationResponse(success: Boolean, message: String)
-  final case class UserOperationResponse(success: Boolean, userId: String, message: String)
   final case class SceneGraphUpdate(sceneGraph: SceneGraph)
 
-  def apply(): Behavior[Command] =
-    Behaviors.setup(context => new RoomActor(context))
-
-  def apply(userManager: ActorRef[UserManager.Command], furnitureManager: ActorRef[FurnitureManager.Command]): Behavior[Command] =
-    Behaviors.setup(context => new RoomActor(context, Some(userManager), Some(furnitureManager)))
+  def apply(llmConfig: LLMConfig): Behavior[Command] =
+    Behaviors.setup(context => new RoomActor(context, llmConfig))
 }
 
 class RoomActor(
   context: ActorContext[RoomActor.Command],
-  userManagerOpt: Option[ActorRef[UserManager.Command]] = None,
-  furnitureManagerOpt: Option[ActorRef[FurnitureManager.Command]] = None
+  llmConfig: LLMConfig
 ) extends AbstractBehavior[RoomActor.Command](context) with LazyLogging {
 
   import RoomActor._
-  import UserManager._
-  import FurnitureManager._
+
+  private implicit val ec: ExecutionContextExecutor = context.executionContext
 
   // Child actors
-  private val userManager: ActorRef[UserManager.Command] = userManagerOpt.getOrElse(
-    context.spawn(UserManager(), "user-manager")
+  private val userManager: ActorRef[UserManager.Command] = context.spawn(
+    UserManager(),
+    "user-manager"
   )
 
-  private val furnitureManager: ActorRef[FurnitureManager.Command] = furnitureManagerOpt.getOrElse(
-    context.spawn(
-      FurnitureManager(LLMClient()),
-      "furniture-manager",
-      SupervisorStrategy.restart
-    )
+  private val furnitureManager: ActorRef[FurnitureManager.Command] = context.spawn(
+    Behaviors.supervise(FurnitureManager(new LLMClient(llmConfig))).onFailure(SupervisorStrategy.restart),
+    "furniture-manager"
   )
 
   // Room state
   private var roomConfig: Option[RoomConfig] = None
   private var pendingLayoutUpdate: Boolean = false
 
+  // Cached state from child actors (updated on every change)
+  private var cachedUsers: immutable.Seq[UserNode] = immutable.Seq.empty
+  private var cachedFurniture: immutable.Seq[FurnitureNode] = immutable.Seq.empty
+
   // Scene update subscribers (WebSocket clients)
   private var subscribers: immutable.Set[ActorRef[SceneGraphUpdate]] = immutable.Set.empty
 
-  // Lifecycle hooks
-  override def preStart: Unit = {
-    logger.info("RoomActor starting")
-  }
-
-  override def postStop: Unit = {
-    logger.info("RoomActor stopped")
-  }
-
   override def onMessage(msg: Command): Behavior[Command] = {
-    logger.debug(s"RoomActor received: ${msg.getClass.getSimpleName}")
     msg match {
       case Initialize(config, replyTo) =>
         handleInitialize(config, replyTo)
 
-      case UserJoined(user, replyTo) =>
-        handleUserJoined(user, replyTo)
+      case UserJoined(user) =>
+        handleUserJoined(user)
 
-      case UserLeft(userId, replyTo) =>
-        handleUserLeft(userId, replyTo)
+      case UserLeft(userId) =>
+        handleUserLeft(userId)
 
       case UserActivityChanged(userId, activity) =>
         handleUserActivityChanged(userId, activity)
@@ -102,14 +94,22 @@ class RoomActor(
       case UserSpeakingChanged(userId, isSpeaking) =>
         handleUserSpeakingChanged(userId, isSpeaking)
 
-      case GetCurrentSceneGraph =>
-        handleGetCurrentSceneGraph()
+      case GetCurrentSceneGraph(replyTo) =>
+        replyTo ! generateSceneGraph()
 
       case SubscribeToSceneUpdates(subscriber) =>
         handleSubscribe(subscriber)
 
       case UnsubscribeFromSceneUpdates(subscriber) =>
         handleUnsubscribe(subscriber)
+
+      case UsersSnapshot(users) =>
+        cachedUsers = users
+        broadcastSceneUpdate()
+
+      case FurnitureSnapshot(furniture) =>
+        cachedFurniture = furniture
+        broadcastSceneUpdate()
 
       case LayoutCompleted(success) =>
         handleLayoutCompleted(success)
@@ -129,106 +129,91 @@ class RoomActor(
       message = s"Room ${config.name} initialized successfully"
     )
 
-    // Broadcast initial empty scene
     broadcastSceneUpdate()
   }
 
-  private def handleUserJoined(user: UserNode, replyTo: ActorRef[UserOperationResponse]): Unit = {
+  private def handleUserJoined(user: UserNode): Unit = {
     logger.info(s"User joined: ${user.username} (${user.id})")
 
-    // Ask UserManager to track the user
-    context.ask(userManager, (ref: ActorRef[UserAddedResponse]) => TrackUser(user, ref)) {
-      case Success(UserAddedResponse(true, _)) =>
-        UserJoinedInternal(user, replyTo)
-      case Success(UserAddedResponse(false, _)) =>
-        UserJoinFailed(user.id, "Failed to track user", replyTo)
-      case Failure(ex) =>
-        UserJoinFailed(user.id, ex.getMessage, replyTo)
+    // Track user in UserManager
+    userManager ! UserManager.TrackUser(user, context.messageAdapter[UserManager.UserAddedResponse] { response =>
+      if (response.success) {
+        logger.info(s"User ${user.username} tracked successfully")
+      } else {
+        logger.warn(s"Failed to track user ${user.username}")
+      }
+      // Request fresh user list
+      userManager ! UserManager.GetActiveUsers(context.messageAdapter[UserManager.ActiveUsersResponse] { usersResp =>
+        UsersSnapshot(usersResp.users)
+      })
+      // Trigger layout update
+      triggerLayoutUpdate()
+      NotifySubscribers
+    })
+
+    // Optimistically add to cache for immediate UI update
+    if (!cachedUsers.exists(_.id == user.id)) {
+      cachedUsers = cachedUsers :+ user
     }
-
-    // Switch to a behavior that handles the response
-    context.self ! UserJoinedInternal(user, replyTo)
-  }
-
-  // Internal messages for async handling
-  private case class UserJoinedInternal(user: UserNode, replyTo: ActorRef[UserOperationResponse]) extends Command
-  private case class UserJoinFailed(userId: String, reason: String, replyTo: ActorRef[UserOperationResponse]) extends Command
-
-  private def handleUserJoinedInternal(user: UserNode, replyTo: ActorRef[UserOperationResponse]): Behavior[Command] = {
-    replyTo ! UserOperationResponse(success = true, user.id, s"User ${user.username} joined")
-
-    // Trigger furniture layout update
-    triggerLayoutUpdate()
-
-    // Broadcast updated scene
     broadcastSceneUpdate()
-
-    this
   }
 
-  private def handleUserJoinFailed(userId: String, reason: String, replyTo: ActorRef[UserOperationResponse]): Behavior[Command] = {
-    logger.error(s"User join failed for $userId: $reason")
-    replyTo ! UserOperationResponse(success = false, userId, reason)
-    this
-  }
-
-  private def handleUserLeft(userId: String, replyTo: ActorRef[UserOperationResponse]): Unit = {
+  private def handleUserLeft(userId: String): Unit = {
     logger.info(s"User left: $userId")
 
-    // Untrack user and release furniture
-    context.pipeToSelf(
-      context.ask(userManager, (ref: ActorRef[UserRemovedResponse]) => UntrackUser(userId, ref)) {
-        case Success(UserRemovedResponse(true, _)) => true
-        case _ => false
-      }
-    ) {
-      case Success(userRemoved) =>
-        if (userRemoved) {
-          // Also release furniture
-          furnitureManager ! UserLeft(userId, context.spawnAnonymous(
-            Behaviors.receiveMessage[FurnitureReleasedResponse] {
-              case FurnitureReleasedResponse(true) =>
-                logger.info(s"Furniture released for user $userId")
-                broadcastSceneUpdate()
-                Behaviors.stopped
-            }
-          ))
-        }
-        LayoutCompleted(success = true)
-      case Failure(ex) =>
-        logger.error("Failed to process user left", ex)
-        LayoutCompleted(success = false)
-    }
+    // Remove from UserManager
+    userManager ! UserManager.UntrackUser(userId, context.messageAdapter[UserManager.UserRemovedResponse] { _ =>
+      // Request fresh user list
+      userManager ! UserManager.GetActiveUsers(context.messageAdapter[UserManager.ActiveUsersResponse] { usersResp =>
+        UsersSnapshot(usersResp.users)
+      })
+      NotifySubscribers
+    })
 
-    replyTo ! UserOperationResponse(success = true, userId, s"User $userId left")
+    // Release furniture
+    furnitureManager ! FurnitureManager.UserLeft(userId, context.messageAdapter[FurnitureManager.FurnitureReleasedResponse] { _ =>
+      furnitureManager ! FurnitureManager.GetFurniture(context.messageAdapter[FurnitureManager.CurrentFurnitureResponse] { resp =>
+        FurnitureSnapshot(resp.furniture.to(immutable.Seq))
+      })
+      NotifySubscribers
+    })
+
+    // Optimistically remove from cache
+    cachedUsers = cachedUsers.filterNot(_.id == userId)
+    cachedFurniture = cachedFurniture.filterNot(_.assignedUserId.contains(userId))
+    broadcastSceneUpdate()
   }
 
   private def handleUserActivityChanged(userId: String, activity: Option[UserActivity]): Unit = {
     logger.info(s"User activity changed: $userId -> ${activity.map(_.name).getOrElse("None")}")
 
-    context.ask(userManager, (ref: ActorRef[ActivityUpdatedResponse]) => UpdateActivity(userId, activity, ref)) {
-      case Success(ActivityUpdatedResponse(true, _)) =>
-        logger.info(s"Activity updated for $userId")
-        // Trigger layout update as furniture may change based on activity
+    userManager ! UserManager.UpdateActivity(userId, activity, context.messageAdapter[UserManager.ActivityUpdatedResponse] { response =>
+      if (response.success) {
+        // Get fresh user list
+        userManager ! UserManager.GetActiveUsers(context.messageAdapter[UserManager.ActiveUsersResponse] { usersResp =>
+          UsersSnapshot(usersResp.users)
+        })
+        // Re-layout since activity changed
         triggerLayoutUpdate()
-        NotifySubscribers()
-      case _ =>
-        logger.warn(s"Failed to update activity for $userId")
-        Behaviors.same
-    }
+      }
+      NotifySubscribers
+    })
 
+    // Optimistically update cache
+    cachedUsers = cachedUsers.map { u =>
+      if (u.id == userId) u.copy(activity = activity) else u
+    }
     broadcastSceneUpdate()
   }
 
   private def handleUserSpeakingChanged(userId: String, isSpeaking: Boolean): Unit = {
-    logger.debug(s"User speaking state changed: $userId -> $isSpeaking")
-    userManager ! UpdateSpeakingState(userId, isSpeaking)
-    broadcastSceneUpdate()
-  }
+    userManager ! UserManager.UpdateSpeakingState(userId, isSpeaking)
 
-  private def handleGetCurrentSceneGraph(): Unit = {
-    // This would be used in ask pattern
-    logger.debug("Scene graph requested")
+    // Optimistically update cache and broadcast immediately (speaking is latency-sensitive)
+    cachedUsers = cachedUsers.map { u =>
+      if (u.id == userId) u.copy(isSpeaking = isSpeaking) else u
+    }
+    broadcastSceneUpdate()
   }
 
   private def handleSubscribe(subscriber: ActorRef[SceneGraphUpdate]): Unit = {
@@ -236,7 +221,7 @@ class RoomActor(
     subscribers += subscriber
 
     // Send current scene immediately
-    context.self ! NotifySubscribers
+    subscriber ! generateSceneGraph()
   }
 
   private def handleUnsubscribe(subscriber: ActorRef[SceneGraphUpdate]): Unit = {
@@ -247,11 +232,16 @@ class RoomActor(
   private def handleLayoutCompleted(success: Boolean): Unit = {
     logger.info(s"Layout update completed: $success")
     pendingLayoutUpdate = false
-    broadcastSceneUpdate()
+
+    // Fetch updated furniture from FurnitureManager
+    furnitureManager ! FurnitureManager.GetFurniture(context.messageAdapter[FurnitureManager.CurrentFurnitureResponse] { resp =>
+      FurnitureSnapshot(resp.furniture.to(immutable.Seq))
+    })
   }
 
   private def handleNotifySubscribers(): Unit = {
-    subscribers.foreach(_ ! generateSceneGraph())
+    val update = generateSceneGraph()
+    subscribers.foreach(_ ! update)
   }
 
   /**
@@ -265,59 +255,53 @@ class RoomActor(
 
     pendingLayoutUpdate = true
 
-    // Get current users and trigger layout generation
-    context.ask(userManager, GetActiveUsers) {
-      case Success(users: Seq[UserNode] @unchecked) =>
-        roomConfig match {
-          case Some(config) =>
-            context.ask(furnitureManager, (ref: ActorRef[LayoutGeneratedResponse]) =>
-              GenerateLayout(users, config, ref)
-            ) {
-              case Success(LayoutGeneratedResponse(true, _, _)) =>
-                LayoutCompleted(success = true)
-              case _ =>
-                LayoutCompleted(success = false)
-            }
-            Behaviors.same
-          case None =>
-            logger.warn("Room not initialized")
-            LayoutCompleted(success = false)
-            Behaviors.same
-        }
-      case _ =>
-        logger.error("Failed to get users for layout")
-        LayoutCompleted(success = false)
-        Behaviors.same
+    val users = cachedUsers
+    roomConfig match {
+      case Some(config) =>
+        furnitureManager ! FurnitureManager.GenerateLayout(
+          users,
+          config,
+          context.messageAdapter[FurnitureManager.LayoutGeneratedResponse] { response =>
+            LayoutCompleted(response.success)
+          }
+        )
+      case None =>
+        logger.warn("Room not initialized, cannot generate layout")
+        pendingLayoutUpdate = false
     }
   }
 
   /**
-   * Generate current scene graph
+   * Generate current scene graph from cached state
    */
   private def generateSceneGraph(): SceneGraphUpdate = {
-    // In a real implementation, we'd query the actors for current state
-    // For now, construct from what we have
-    val scene = roomConfig match {
-      case Some(config) =>
-        SceneGraph.create(
-          users = Seq.empty, // Would be populated from UserManager
-          furniture = Seq.empty, // Would be populated from FurnitureManager
-          room = config
-        )
-      case None =>
-        SceneGraph.create(
-          users = Seq.empty,
-          furniture = Seq.empty,
-          room = RoomConfig(
-            id = "uninitialized",
-            name = "Uninitialized",
-            dimensions = RoomDimensions(10, 3, 10),
-            maxUsers = 10
-          )
-        )
+    val config = roomConfig.getOrElse(
+      RoomConfig(
+        id = "uninitialized",
+        name = "Uninitialized",
+        dimensions = RoomDimensions(10, 3, 10),
+        maxUsers = 10
+      )
+    )
+
+    // Position users at their assigned furniture
+    val positionedUsers = cachedUsers.map { user =>
+      val furniturePos = cachedFurniture
+        .find(_.assignedUserId.contains(user.id))
+        .map(f => f.position.copy(y = 0, z = f.position.z + 1.0)) // Slightly in front of furniture
+      user.copy(
+        position = furniturePos.getOrElse(user.position),
+        currentFurnitureId = cachedFurniture.find(_.assignedUserId.contains(user.id)).map(_.id)
+      )
     }
 
-    SceneGraphUpdate(scene)
+    SceneGraphUpdate(
+      SceneGraph.create(
+        users = positionedUsers,
+        furniture = cachedFurniture,
+        room = config
+      )
+    )
   }
 
   /**
@@ -325,7 +309,6 @@ class RoomActor(
    */
   private def broadcastSceneUpdate(): Unit = {
     if (subscribers.nonEmpty) {
-      logger.debug(s"Broadcasting scene update to ${subscribers.size} subscribers")
       context.self ! NotifySubscribers
     }
   }

@@ -4,7 +4,6 @@ import {
   toThreeVector3,
   createTextSprite,
   createSpeakingIndicator,
-  loadTexture,
   createDefaultAvatarTexture,
 } from '../utils/sceneUtils';
 
@@ -24,7 +23,7 @@ export class UserAvatar {
   private targetRotation: THREE.Euler;
   private speakingIndicator: THREE.Mesh;
   private usernameLabel: THREE.Sprite;
-  private avatarSprite: THREE.Sprite;
+  private avatarSprite!: THREE.Sprite;
   private isSpeaking: boolean = false;
   private speakingPulseTime: number = 0;
 
@@ -80,18 +79,19 @@ export class UserAvatar {
   /**
    * Update user data from backend
    */
-  public updateData(userData: UserNode): void {
-    this.userData = userData;
-    this.targetPosition = toThreeVector3(userData.position);
-    this.targetRotation = new THREE.Euler(userData.rotation.x, userData.rotation.y, userData.rotation.z);
+  public updateData(newData: UserNode): void {
+    const oldDisplayName = this.userData.displayName;
+    this.userData = newData;
+    this.targetPosition = toThreeVector3(newData.position);
+    this.targetRotation = new THREE.Euler(newData.rotation.x, newData.rotation.y, newData.rotation.z);
 
     // Update speaking state
-    this.setSpeaking(userData.isSpeaking);
+    this.setSpeaking(newData.isSpeaking);
 
     // Update username if changed
-    if (this.userData.displayName !== userData.displayName) {
+    if (oldDisplayName !== newData.displayName) {
       this.mesh.remove(this.usernameLabel);
-      this.usernameLabel = createTextSprite(userData.displayName);
+      this.usernameLabel = createTextSprite(newData.displayName);
       this.usernameLabel.position.set(0, 1.5, 0);
       this.mesh.add(this.usernameLabel);
     }

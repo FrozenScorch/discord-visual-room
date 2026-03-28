@@ -121,32 +121,53 @@ export class WSClient {
    */
   private handleMessage(event: MessageEvent): void {
     try {
-      const message: WSMessage = JSON.parse(event.data);
+      const parsed = JSON.parse(event.data);
 
-      // Handle different message types
-      switch (message.type) {
-        case 'SCENE_UPDATE':
-          this.handleSceneUpdate(message as SceneUpdateMessage);
-          break;
-
-        case 'USER_JOINED':
-        case 'USER_LEFT':
-        case 'USER_MOVED':
-        case 'ACTIVITY_CHANGED':
-          // These are handled via SCENE_UPDATE in dumb renderer architecture
-          console.log(`Received ${message.type} (will be handled by SCENE_UPDATE)`);
-          break;
-
-        case 'ERROR':
-          console.error('Server error:', message.payload);
-          if (this.onErrorCallback) {
-            this.onErrorCallback(new Error(String(message.payload)));
-          }
-          break;
-
-        default:
-          console.warn('Unknown message type:', (message as WSMessage).type);
+      // Handle wrapped message format: {"type": "SCENE_UPDATE", "timestamp": ..., "payload": {...}}
+      if (parsed.type === 'SCENE_UPDATE' && parsed.payload) {
+        const message: SceneUpdateMessage = {
+          type: 'SCENE_UPDATE',
+          timestamp: parsed.timestamp || Date.now(),
+          payload: parsed.payload,
+        };
+        this.handleSceneUpdate(message);
+        return;
       }
+
+      // Handle other wrapped message types
+      if (parsed.type) {
+        const message = parsed as WSMessage;
+        switch (message.type) {
+          case 'USER_JOINED':
+          case 'USER_LEFT':
+          case 'USER_MOVED':
+          case 'ACTIVITY_CHANGED':
+            console.log(`Received ${message.type} (handled by SCENE_UPDATE)`);
+            break;
+          case 'ERROR':
+            console.error('Server error:', message.payload);
+            if (this.onErrorCallback) {
+              this.onErrorCallback(new Error(String(message.payload)));
+            }
+            break;
+          default:
+            console.warn('Unknown message type:', message.type);
+        }
+        return;
+      }
+
+      // Handle raw SceneGraph (no wrapper) as fallback
+      if (parsed.version && parsed.users !== undefined && parsed.furniture !== undefined) {
+        const message: SceneUpdateMessage = {
+          type: 'SCENE_UPDATE',
+          timestamp: parsed.timestamp || Date.now(),
+          payload: parsed,
+        };
+        this.handleSceneUpdate(message);
+        return;
+      }
+
+      console.warn('Unrecognized WebSocket message format:', parsed);
     } catch (error) {
       console.error('Failed to parse WebSocket message:', error);
     }
@@ -164,15 +185,15 @@ export class WSClient {
   /**
    * Handle WebSocket error
    */
-  private handleError(event: Event): void {
-    console.error('WebSocket error:', event);
+  private handleError(_event: Event): void {
+    console.error('WebSocket error:', _event);
     this.handleConnectionError(new Error('WebSocket connection error'));
   }
 
   /**
    * Handle WebSocket close
    */
-  private handleClose(event: CloseEvent): void {
+  private handleClose(_event: CloseEvent): void {
     const wasConnected = this.state === 'connected';
     this.setState('disconnected');
 

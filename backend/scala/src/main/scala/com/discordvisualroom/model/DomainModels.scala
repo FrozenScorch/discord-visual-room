@@ -237,59 +237,8 @@ case class ValidationResult(
   sanitizedAssignments: Option[Seq[FurnitureAssignment]] = None
 )
 
-/**
- * Actor messages for RoomActor
- */
-sealed trait RoomCommand
-
-object RoomCommand {
-  case class Initialize(config: RoomConfig) extends RoomCommand
-  case class AddUser(user: UserNode) extends RoomCommand
-  case class RemoveUser(userId: String) extends RoomCommand
-  case class UpdateUserActivity(userId: String, activity: Option[UserActivity]) extends RoomCommand
-  case class UpdateUserSpeaking(userId: String, isSpeaking: Boolean) extends RoomCommand
-  case class UpdateFurnitureAssignments(assignments: Seq[FurnitureAssignment]) extends RoomCommand
-  case object RequestSceneGraph extends RoomCommand
-  case object RequestLayoutUpdate extends RoomCommand
-}
-
-/**
- * Actor messages for UserManager
- */
-sealed trait UserManagerMessage
-
-object UserManagerMessage {
-  case class TrackUser(user: UserNode) extends UserManagerMessage
-  case class UntrackUser(userId: String) extends UserManagerMessage
-  case class UpdateActivity(userId: String, activity: Option[UserActivity]) extends UserManagerMessage
-  case class UpdateSpeakingState(userId: String, isSpeaking: Boolean) extends UserManagerMessage
-  case object GetActiveUsers extends UserManagerMessage
-}
-
-/**
- * Actor messages for FurnitureManager
- */
-sealed trait FurnitureManagerMessage
-
-object FurnitureManagerMessage {
-  case class GenerateLayout(users: Seq[UserNode], roomConfig: RoomConfig) extends FurnitureManagerMessage
-  case class AssignFurniture(assignments: Seq[FurnitureAssignment]) extends FurnitureManagerMessage
-  case object GetFurniture extends FurnitureManagerMessage
-  case class UserLeft(userId: String) extends FurnitureManagerMessage
-}
-
-/**
- * Actor responses
- */
-sealed trait RoomResponse
-
-object RoomResponse {
-  case class SceneGraphState(sceneGraph: SceneGraph) extends RoomResponse
-  case class UserAdded(userId: String) extends RoomResponse
-  case class UserRemoved(userId: String) extends RoomResponse
-  case class LayoutUpdated(furnitureCount: Int) extends RoomResponse
-  case class OperationFailed(reason: String) extends RoomResponse
-}
+// Actor messages are defined in their respective actor companion objects
+// (RoomActor, UserManager, FurnitureManager) in the actors package.
 
 /**
  * Configuration for the application

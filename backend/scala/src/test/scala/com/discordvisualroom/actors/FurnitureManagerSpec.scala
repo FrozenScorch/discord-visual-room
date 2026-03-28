@@ -353,7 +353,7 @@ class FurnitureManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     override def generateFurnitureLayout(
       users: Seq[UserNode],
       roomConfig: RoomConfig
-    ): scala.concurrent.Future[Either[Seq[FurnitureAssignment], Seq[FurnitureAssignment]]] = {
+    )(implicit ec: scala.concurrent.ExecutionContext): scala.concurrent.Future[Either[Seq[FurnitureAssignment], Seq[FurnitureAssignment]]] = {
       import scala.concurrent.Future
 
       val assignments = users.zipWithIndex.map { case (user, index) =>
@@ -378,9 +378,8 @@ class FurnitureManagerSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     override def generateFurnitureLayout(
       users: Seq[UserNode],
       roomConfig: RoomConfig
-    ): scala.concurrent.Future[Either[Seq[FurnitureAssignment], Seq[FurnitureAssignment]]] = {
+    )(implicit ec: scala.concurrent.ExecutionContext): scala.concurrent.Future[Either[Seq[FurnitureAssignment], Seq[FurnitureAssignment]]] = {
       import scala.concurrent.Future
-      import scala.util.Try
 
       // Simulate LLM failure
       Future.failed(new Exception("LLM connection failed"))

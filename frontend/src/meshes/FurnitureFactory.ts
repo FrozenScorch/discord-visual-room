@@ -70,7 +70,7 @@ export class FurnitureFactory {
 
     legPositions.forEach((pos) => {
       const leg = new THREE.Mesh(legGeom, woodMaterial);
-      leg.position.set(...pos);
+      leg.position.set(pos[0], pos[1], pos[2]);
       leg.castShadow = true;
       group.add(leg);
     });

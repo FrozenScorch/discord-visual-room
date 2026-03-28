@@ -19,6 +19,8 @@ export type {
   ValidationResult,
 } from '@discord-visual-room/types';
 
+import type { FurnitureNode as FN, UserNode as UN } from '@discord-visual-room/types';
+
 /**
  * Frontend-specific types
  */
@@ -29,8 +31,8 @@ export type {
 export interface SceneObject {
   id: string;
   type: 'furniture' | 'user';
-  mesh: THREE.Object3D;
-  data: FurnitureNode | UserNode;
+  mesh: import('three').Object3D;
+  data: FN | UN;
 }
 
 /**
