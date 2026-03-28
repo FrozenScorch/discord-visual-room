@@ -1,144 +1,112 @@
 # Discord Visual Room - Frontend
 
-Three.js frontend renderer for the Discord Visual Room project.
+Three.js frontend renderer for the Discord Visual Room project. Renders a cozy ambient 3D room that visualizes Discord voice channel activity.
 
 ## Architecture: DUMB RENDERER
 
-This frontend maintains NO state. All state comes from the backend via WebSocket SCENE_UPDATE messages.
+This frontend maintains NO state. All state comes from the backend via WebSocket `SCENE_UPDATE` messages. The renderer diffs the incoming SceneGraph against current scene objects and applies changes.
 
-## Features
+## Visual Design
 
-- **Three.js 3D Rendering**: WebGL-powered 3D scene with shadows and lighting
-- **WebSocket Client**: Auto-reconnecting WebSocket for real-time updates
-- **Pre-loaded Furniture Meshes**: Four furniture types created with basic geometries
-- **User Avatars**: 3D avatar representations with username labels
-- **Speaking Indicators**: Visual feedback when users are talking
-- **Responsive Design**: Adapts to different screen sizes
-- **Orbit Controls**: User can rotate, pan, and zoom the camera
+Designed as an ambient side-monitor display - "a cute little window into the life of the server."
 
-## Furniture Types
+### Aesthetic
+- **Lighting**: Warm ACES filmic tone mapping, ambient + directional key + cool fill + center point glow + hemisphere sky/ground
+- **Room**: Circular floor with dark purple rug, Discord-accent (#5865F2) glow ring edge, exponential fog
+- **Particles**: 200 floating warm-white dust motes with additive blending, gentle drift
+- **Camera**: Auto-orbit with sway after 8s idle; pauses on interaction
 
-The frontend has these pre-loaded meshes (must match backend exactly):
+### Furniture Types (4 meshes)
+1. **COMPUTER_DESK** - Warm maple desk (0xD4A574), glowing blue monitor (emissive 0x4488CC), keyboard tray
+2. **COUCH_2_SEATER** - Soft purple frame (0x7B68AE), sphere cushions, matching base
+3. **COUCH_SINGLE** - Teal armchair (0x5BA4B5), puffy cushion, armrests
+4. **BAR_STOOL** - Warm peach seat (0xE8A87C), chrome pole (0xCCCCCC), footrest ring
 
-1. **COMPUTER_DESK** - Large desk for competitive gaming
-2. **COUCH_2_SEATER** - Two-seater couch for co-op gaming
-3. **COUCH_SINGLE** - Single armchair for solo/AFK
-4. **BAR_STOOL** - Tall stool for mobile/handheld gaming
+### User Avatars
+- Discord PFP as billboard sprite (always faces camera)
+- Fallback: pastel gradient circle with username initials
+- Pill-shaped username label (semi-transparent dark background)
+- Activity label in Discord blurple pill (shows game/status)
+- **Spawn**: Elastic scale from 0 with overshoot (0.4s)
+- **Despawn**: Scale to 0 (0.3s), then dispose
+- **Speaking**: Discord green (#43b581) torus ring pulse + gentle avatar bounce
 
-## Development
-
-### Installation
-
-```bash
-npm install
-```
-
-### Build Shared Types First
-
-```bash
-cd ../shared/types
-npm run build
-cd ../../frontend
-```
-
-### Run Development Server
-
-```bash
-npm run dev
-```
-
-The dev server runs on **port 8000** (as per project requirements).
-
-Open http://localhost:8000 in your browser.
-
-### Build for Production
-
-```bash
-npm run build
-```
-
-### Type Check
-
-```bash
-npm run typecheck
-```
-
-## Configuration
-
-Create a `.env` file in the frontend directory:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` to set the WebSocket URL:
-
-```
-VITE_WS_URL=ws://your-backend-server:8080
-```
+### UI Overlay
+- Minimal top bar with room title + connection status dot (fades after 3s connected)
+- User count badge (bottom-left, glassmorphism pill)
+- No legends, no controls panel - clean ambient look
 
 ## File Structure
 
 ```
 frontend/
 ├── src/
-│   ├── main.ts                    # Entry point
-│   ├── SceneRenderer.ts           # Three.js scene manager
-│   ├── WSClient.ts                # WebSocket client
-│   ├── types.ts                   # Frontend-specific types
-│   ├── styles.css                 # Main stylesheet
+│   ├── main.ts                    # Entry point, UI overlay wiring
+│   ├── SceneRenderer.ts           # Three.js scene, lighting, camera, particles, render loop
+│   ├── WSClient.ts                # WebSocket client with auto-reconnect
+│   ├── types.ts                   # Re-exports shared types + frontend-specific types
+│   ├── styles.css                 # Minimal ambient UI styles
 │   ├── meshes/
-│   │   ├── FurnitureFactory.ts    # Create furniture meshes
-│   │   └── UserAvatar.ts          # User avatar class
-│   └── utils/
-│       └── sceneUtils.ts          # Helper functions
-├── index.html                     # HTML container
-├── vite.config.ts                 # Vite configuration
-├── tsconfig.json                  # TypeScript configuration
+│   │   ├── FurnitureFactory.ts    # Procedural furniture geometry + materials
+│   │   └── UserAvatar.ts          # User avatar with PFP, animations, labels
+│   ├── utils/
+│   │   └── sceneUtils.ts          # Text sprites, texture loading, speaking ring
+│   ├── logging/                   # Logger utility
+│   ├── metrics/                   # Metrics collector
+│   └── monitoring/                # Error handler
+├── index.html                     # Minimal HTML shell
+├── vite.config.ts                 # Vite config (port 8000)
+├── tsconfig.json                  # TypeScript config
 └── package.json                   # Dependencies
 ```
 
+## Development
+
+```bash
+npm install
+npm run dev          # Dev server on port 8000
+npm run build        # Production build
+npm run typecheck    # TypeScript check (strict)
+```
+
+### Environment
+
+Create `.env`:
+```
+VITE_WS_URL=ws://localhost:8080/ws
+```
+
+Both `VITE_WS_URL` and `VITE_FRONTEND_WS_URL` are supported. The URL must end with `/ws` to match the backend route (auto-appended if missing).
+
 ## WebSocket Protocol
 
-The frontend listens for these message types from the backend:
+### SCENE_UPDATE (main message type)
 
-### SCENE_UPDATE
-
-Main message type containing the complete scene state:
-
-```typescript
+```json
 {
-  type: "SCENE_UPDATE",
-  timestamp: number,
-  payload: {
-    version: string,
-    timestamp: number,
-    users: UserNode[],
-    furniture: FurnitureNode[],
-    room: RoomConfig
+  "type": "SCENE_UPDATE",
+  "timestamp": 1234567890,
+  "payload": {
+    "version": "1.0",
+    "timestamp": 1234567890,
+    "users": [...],
+    "furniture": [...],
+    "room": { "name": "...", "dimensions": {...} }
   }
 }
 ```
 
-On each SCENE_UPDATE, the frontend:
-1. Updates room visualization
-2. Creates/updates/removes furniture
-3. Creates/updates/removes user avatars
-4. Updates positions and rotations smoothly (lerp)
+The frontend also accepts raw SceneGraph JSON (without the wrapper) for backwards compatibility.
 
-## Controls
-
-- **Left click + drag**: Rotate camera
-- **Right click + drag**: Pan camera
-- **Scroll wheel**: Zoom in/out
+### On each SCENE_UPDATE
+1. Diff furniture: create new, remove missing (with despawn animation), lerp existing
+2. Diff users: create new avatars (with spawn animation), despawn missing, update data
+3. Update room boundary wireframe
+4. Update user count badge
 
 ## Dependencies
 
-- **three**: ^0.160.0 - 3D rendering engine
-- **@discord-visual-room/types**: workspace:* - Shared TypeScript types
-
-## Dev Dependencies
-
-- **@types/three**: ^0.160.0 - Three.js type definitions
-- **typescript**: ^5.4.0 - TypeScript compiler
-- **vite**: ^5.1.0 - Build tool and dev server
+- **three** ^0.160.0 - 3D rendering
+- **@discord-visual-room/types** workspace:* - Shared TypeScript types
+- **vite** ^5.1.0 - Build tool
+- **typescript** ^5.4.0 - TypeScript compiler

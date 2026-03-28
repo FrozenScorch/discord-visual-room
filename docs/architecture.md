@@ -123,17 +123,19 @@ The backend uses Akka Actors for:
 object RoomActor {
   sealed trait Command
 
-  // Lifecycle
-  case class Initialize(config: RoomConfig, replyTo: ActorRef[InitializationResponse])
-
-  // User events
-  case class UserJoined(user: UserNode, replyTo: ActorRef[UserOperationResponse])
-  case class UserLeft(userId: String, replyTo: ActorRef[UserOperationResponse])
-  case class UserActivityChanged(userId: String, activity: Option[UserActivity])
+  // User events (fire-and-forget, no replyTo to avoid null NPE)
+  case class UserJoined(user: UserNode) extends Command
+  case class UserLeft(userId: String) extends Command
+  case class UserActivityChanged(userId: String, activity: Option[UserActivity]) extends Command
 
   // Scene queries
-  case object GetCurrentSceneGraph
-  case class SubscribeToSceneUpdates(subscriber: ActorRef[SceneGraphUpdate])
+  case class GetCurrentSceneGraph(replyTo: ActorRef[SceneGraphUpdate]) extends Command
+  case class SubscribeToSceneUpdates(subscriber: ActorRef[SceneGraphUpdate]) extends Command
+  case class UnsubscribeFromSceneUpdates(subscriber: ActorRef[SceneGraphUpdate]) extends Command
+
+  // Internal (from messageAdapter)
+  case class UsersSnapshot(users: Seq[UserNode]) extends Command
+  case class FurnitureSnapshot(furniture: Seq[FurnitureNode]) extends Command
 }
 ```
 
@@ -162,7 +164,17 @@ object RoomActor {
 │  │ - Connect    │  │ - Three.js   │  │ - Mesh cache │      │
 │  │ - Reconnect  │  │ - Camera     │  │ - Create     │      │
 │  │ - Messages   │  │ - Lights     │  │ - Clone      │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
+│  └──────────────┘  │ - Particles  │  └──────────────┘      │
+│                     │ - Auto-orbit │                         │
+│                     └──────┬───────┘                         │
+│                            │                                  │
+│                     ┌──────┴───────┐                         │
+│                     │  UserAvatar  │                         │
+│                     │ - PFP sprite │                         │
+│                     │ - Spawn anim │                         │
+│                     │ - Speaking fx│                         │
+│                     │ - Activity   │                         │
+│                     └──────────────┘                         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -172,6 +184,7 @@ object RoomActor {
    - No state management
    - Renders whatever SceneGraph backend sends
    - No business logic
+   - Diffs incoming SceneGraph against current objects
 
 2. **Factory Pattern**
    - FurnitureFactory creates and caches meshes
@@ -181,6 +194,12 @@ object RoomActor {
 3. **Observer Pattern**
    - WSClient notifies on scene updates
    - SceneRenderer updates entire scene atomically
+
+4. **Animation Pattern**
+   - Spawn: elastic scale from 0 with overshoot
+   - Despawn: scale to 0, then dispose callback
+   - Speaking: pulse ring + bounce (per-frame in update())
+   - Position: lerp toward target each frame
 
 ## Data Flow
 
@@ -477,6 +496,23 @@ Backend                               Frontend
 │  └──────────────┘                                            │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## Remaining Work / Known Issues
+
+### High Priority
+1. **Occupied furniture glow** - `FurnitureFactory.getMesh()` shares material references across clones. Need deep-clone-with-materials so each instance can independently glow when `furniture.assignedUser` is set.
+2. **Discord PFP CORS** - Discord CDN blocks cross-origin texture loads. Add `images.weserv.nl` proxy in `sceneUtils.ts:loadTexture()`.
+3. **Room name in UI** - `SceneGraph.room.name` exists but top bar is hardcoded.
+
+### Medium Priority
+4. **Delta updates** - Full SceneGraph sent on every change; add diff mode.
+5. **Seated position** - Avatars should lerp to offset position relative to assigned furniture.
+6. **User body mesh** - Currently sprite-only; consider CapsuleGeometry body.
+
+### Low Priority
+7. **Object pooling** for furniture mesh reuse
+8. **LOD** for distant objects
+9. **Sound indicators** for join/leave (opt-in)
 
 ---
 
