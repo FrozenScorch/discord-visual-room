@@ -2,18 +2,12 @@ import * as THREE from 'three';
 import type { FurnitureType } from '../types';
 
 /**
- * FurnitureFactory - Creates pre-loaded 3D meshes for all furniture types
- *
- * IMPORTANT: These must match the exact types in the shared types package.
- * The backend sends furniture type strings that must match these keys.
+ * FurnitureFactory - Creates cute, rounded 3D meshes for all furniture types
+ * Uses soft colors, rounded geometry, and subtle glow for a cozy aesthetic.
  */
 export class FurnitureFactory {
   private static meshes: Map<FurnitureType, THREE.Object3D> = new Map();
 
-  /**
-   * Initialize all pre-loaded furniture meshes
-   * Call this once at application startup
-   */
   public static initialize(): void {
     this.meshes.set('COMPUTER_DESK', this.createComputerDesk());
     this.meshes.set('COUCH_2_SEATER', this.createCouch2Seater());
@@ -21,235 +15,229 @@ export class FurnitureFactory {
     this.meshes.set('BAR_STOOL', this.createBarStool());
   }
 
-  /**
-   * Get a cloned instance of a furniture mesh
-   * Each furniture placement gets its own clone
-   */
   public static getMesh(type: FurnitureType): THREE.Object3D | null {
     const original = this.meshes.get(type);
     return original ? original.clone() : null;
   }
 
-  /**
-   * Get all available furniture types
-   */
   public static getAvailableTypes(): FurnitureType[] {
     return Array.from(this.meshes.keys());
   }
 
+  /** Rounded box helper using ExtrudeGeometry for soft edges */
+  private static roundedBox(w: number, h: number, d: number, r: number): THREE.BufferGeometry {
+    const shape = new THREE.Shape();
+    const hw = w / 2 - r;
+    const hd = d / 2 - r;
+    shape.moveTo(-hw, -hd);
+    shape.lineTo(hw, -hd);
+    shape.quadraticCurveTo(hw + r, -hd, hw + r, -hd + r);
+    shape.lineTo(hw + r, hd);
+    shape.quadraticCurveTo(hw + r, hd + r, hw, hd + r);
+    shape.lineTo(-hw, hd + r);
+    shape.quadraticCurveTo(-hw - r, hd + r, -hw - r, hd);
+    shape.lineTo(-hw - r, -hd);
+    shape.quadraticCurveTo(-hw - r, -hd - r + r, -hw, -hd);
+
+    const extrudeSettings = { depth: h, bevelEnabled: true, bevelThickness: r * 0.3, bevelSize: r * 0.3, bevelSegments: 3 };
+    const geom = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+    geom.rotateX(-Math.PI / 2);
+    geom.translate(0, h / 2, 0);
+    return geom;
+  }
+
   /**
-   * Create a computer desk mesh
-   * - Large flat surface for monitors/keyboard
-   * - Legs at corners
-   * - Color: Wood brown
+   * Computer Desk - Warm wood with a tiny monitor and soft glow
    */
   private static createComputerDesk(): THREE.Object3D {
     const group = new THREE.Group();
 
-    // Desk surface (main table)
-    const surfaceGeom = new THREE.BoxGeometry(2, 0.1, 1);
-    const woodMaterial = new THREE.MeshStandardMaterial({
-      color: 0x8B4513, // Saddle brown
-      roughness: 0.7,
-      metalness: 0.1,
+    // Desk surface - warm maple
+    const surfaceGeom = new THREE.BoxGeometry(2.2, 0.12, 1.1);
+    surfaceGeom.translate(0, 0, 0);
+    const woodMat = new THREE.MeshStandardMaterial({
+      color: 0xD4A574, // warm maple
+      roughness: 0.6,
+      metalness: 0.05,
     });
-    const surface = new THREE.Mesh(surfaceGeom, woodMaterial);
+    const surface = new THREE.Mesh(surfaceGeom, woodMat);
     surface.position.y = 0.75;
     surface.castShadow = true;
     surface.receiveShadow = true;
     group.add(surface);
 
-    // Desk legs (4 corners)
-    const legGeom = new THREE.BoxGeometry(0.08, 0.75, 0.08);
-    const legPositions = [
-      [-0.9, 0.375, -0.4],
-      [0.9, 0.375, -0.4],
-      [-0.9, 0.375, 0.4],
-      [0.9, 0.375, 0.4],
-    ];
-
-    legPositions.forEach((pos) => {
-      const leg = new THREE.Mesh(legGeom, woodMaterial);
-      leg.position.set(pos[0], pos[1], pos[2]);
+    // Rounded legs
+    const legGeom = new THREE.CylinderGeometry(0.04, 0.05, 0.75, 8);
+    const legMat = new THREE.MeshStandardMaterial({ color: 0xC09060, roughness: 0.5 });
+    const legPositions: [number, number][] = [[-0.95, -0.45], [0.95, -0.45], [-0.95, 0.45], [0.95, 0.45]];
+    legPositions.forEach(([x, z]) => {
+      const leg = new THREE.Mesh(legGeom, legMat);
+      leg.position.set(x, 0.375, z);
       leg.castShadow = true;
       group.add(leg);
     });
 
-    // Monitor stand hint (small rectangle on desk)
-    const monitorStandGeom = new THREE.BoxGeometry(0.3, 0.05, 0.2);
-    const darkMaterial = new THREE.MeshStandardMaterial({
-      color: 0x2a2a2a,
-      roughness: 0.5,
-      metalness: 0.7,
+    // Cute tiny monitor
+    const monitorGeom = new THREE.BoxGeometry(0.6, 0.4, 0.04);
+    const screenMat = new THREE.MeshStandardMaterial({
+      color: 0x88BBFF,
+      roughness: 0.2,
+      metalness: 0.1,
+      emissive: 0x4488CC,
+      emissiveIntensity: 0.3,
     });
-    const monitorStand = new THREE.Mesh(monitorStandGeom, darkMaterial);
-    monitorStand.position.set(0, 0.825, -0.3);
-    group.add(monitorStand);
+    const monitor = new THREE.Mesh(monitorGeom, screenMat);
+    monitor.position.set(0, 1.05, -0.35);
+    group.add(monitor);
+
+    // Monitor stand
+    const standGeom = new THREE.CylinderGeometry(0.02, 0.04, 0.15, 8);
+    const standMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.7, roughness: 0.3 });
+    const stand = new THREE.Mesh(standGeom, standMat);
+    stand.position.set(0, 0.88, -0.35);
+    group.add(stand);
+
+    // Keyboard
+    const kbGeom = new THREE.BoxGeometry(0.5, 0.03, 0.15);
+    const kbMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.4, metalness: 0.3 });
+    const kb = new THREE.Mesh(kbGeom, kbMat);
+    kb.position.set(0, 0.82, 0);
+    group.add(kb);
 
     return group;
   }
 
   /**
-   * Create a 2-seater couch
-   * - Wide seating area
-   * - Backrest and armrests
-   * - Color: Gray fabric
+   * 2-Seater Couch - Plush, rounded, cozy purple
    */
   private static createCouch2Seater(): THREE.Object3D {
     const group = new THREE.Group();
 
-    const fabricMaterial = new THREE.MeshStandardMaterial({
-      color: 0x696969, // Dim gray
+    const fabricMat = new THREE.MeshStandardMaterial({
+      color: 0x7B68AE, // Soft purple
       roughness: 0.9,
       metalness: 0.0,
     });
 
-    // Seat base
-    const seatGeom = new THREE.BoxGeometry(2.5, 0.4, 1);
-    const seat = new THREE.Mesh(seatGeom, fabricMaterial);
-    seat.position.y = 0.2;
+    // Seat base - rounded
+    const seatGeom = new THREE.BoxGeometry(2.6, 0.5, 1.1);
+    const seat = new THREE.Mesh(seatGeom, fabricMat);
+    seat.position.y = 0.25;
     seat.castShadow = true;
     seat.receiveShadow = true;
     group.add(seat);
 
-    // Backrest
-    const backGeom = new THREE.BoxGeometry(2.5, 0.6, 0.2);
-    const back = new THREE.Mesh(backGeom, fabricMaterial);
-    back.position.set(0, 0.7, -0.4);
+    // Backrest - taller, rounded
+    const backMat = new THREE.MeshStandardMaterial({ color: 0x6A5A9E, roughness: 0.9 });
+    const backGeom = new THREE.BoxGeometry(2.6, 0.7, 0.25);
+    const back = new THREE.Mesh(backGeom, backMat);
+    back.position.set(0, 0.8, -0.42);
     back.castShadow = true;
     group.add(back);
 
-    // Left armrest
-    const armGeom = new THREE.BoxGeometry(0.2, 0.5, 1);
-    const leftArm = new THREE.Mesh(armGeom, fabricMaterial);
-    leftArm.position.set(-1.15, 0.45, 0);
+    // Armrests
+    const armGeom = new THREE.BoxGeometry(0.25, 0.5, 1.1);
+    const leftArm = new THREE.Mesh(armGeom, backMat);
+    leftArm.position.set(-1.2, 0.5, 0);
     leftArm.castShadow = true;
     group.add(leftArm);
-
-    // Right armrest
-    const rightArm = new THREE.Mesh(armGeom, fabricMaterial);
-    rightArm.position.set(1.15, 0.45, 0);
+    const rightArm = new THREE.Mesh(armGeom, backMat);
+    rightArm.position.set(1.2, 0.5, 0);
     rightArm.castShadow = true;
     group.add(rightArm);
 
-    // Two seat cushions
-    const cushionGeom = new THREE.BoxGeometry(1.1, 0.15, 0.9);
-    const cushionMaterial = new THREE.MeshStandardMaterial({
-      color: 0x808080,
-      roughness: 0.85,
+    // Two cute cushions
+    const cushionMat = new THREE.MeshStandardMaterial({ color: 0x9B88CE, roughness: 0.85 });
+    const cushionGeom = new THREE.SphereGeometry(0.35, 16, 12);
+    [-0.5, 0.5].forEach(x => {
+      const cushion = new THREE.Mesh(cushionGeom, cushionMat);
+      cushion.position.set(x, 0.55, 0);
+      cushion.scale.set(1.4, 0.6, 1);
+      group.add(cushion);
     });
-
-    const leftCushion = new THREE.Mesh(cushionGeom, cushionMaterial);
-    leftCushion.position.set(-0.55, 0.475, 0);
-    group.add(leftCushion);
-
-    const rightCushion = new THREE.Mesh(cushionGeom, cushionMaterial);
-    rightCushion.position.set(0.55, 0.475, 0);
-    group.add(rightCushion);
 
     return group;
   }
 
   /**
-   * Create a single-seat couch/armchair
-   * - Smaller version of 2-seater
-   * - Color: Blue fabric
+   * Single Couch / Armchair - Cozy teal blue
    */
   private static createCouchSingle(): THREE.Object3D {
     const group = new THREE.Group();
 
-    const fabricMaterial = new THREE.MeshStandardMaterial({
-      color: 0x4682B4, // Steel blue
+    const fabricMat = new THREE.MeshStandardMaterial({
+      color: 0x5BA4B5, // Teal blue
       roughness: 0.9,
       metalness: 0.0,
     });
 
-    // Seat base
-    const seatGeom = new THREE.BoxGeometry(1.2, 0.4, 1);
-    const seat = new THREE.Mesh(seatGeom, fabricMaterial);
-    seat.position.y = 0.2;
+    const seatGeom = new THREE.BoxGeometry(1.3, 0.5, 1.1);
+    const seat = new THREE.Mesh(seatGeom, fabricMat);
+    seat.position.y = 0.25;
     seat.castShadow = true;
     seat.receiveShadow = true;
     group.add(seat);
 
-    // Backrest
-    const backGeom = new THREE.BoxGeometry(1.2, 0.6, 0.2);
-    const back = new THREE.Mesh(backGeom, fabricMaterial);
-    back.position.set(0, 0.7, -0.4);
+    const backMat = new THREE.MeshStandardMaterial({ color: 0x4A8E9E, roughness: 0.9 });
+    const backGeom = new THREE.BoxGeometry(1.3, 0.7, 0.22);
+    const back = new THREE.Mesh(backGeom, backMat);
+    back.position.set(0, 0.8, -0.42);
     back.castShadow = true;
     group.add(back);
 
-    // Left armrest
-    const armGeom = new THREE.BoxGeometry(0.2, 0.5, 1);
-    const leftArm = new THREE.Mesh(armGeom, fabricMaterial);
-    leftArm.position.set(-0.6, 0.45, 0);
-    leftArm.castShadow = true;
-    group.add(leftArm);
-
-    // Right armrest
-    const rightArm = new THREE.Mesh(armGeom, fabricMaterial);
-    rightArm.position.set(0.6, 0.45, 0);
-    rightArm.castShadow = true;
-    group.add(rightArm);
+    const armGeom = new THREE.BoxGeometry(0.2, 0.5, 1.1);
+    [-0.65, 0.65].forEach(x => {
+      const arm = new THREE.Mesh(armGeom, backMat);
+      arm.position.set(x, 0.5, 0);
+      arm.castShadow = true;
+      group.add(arm);
+    });
 
     // Seat cushion
-    const cushionGeom = new THREE.BoxGeometry(0.9, 0.15, 0.9);
-    const cushionMaterial = new THREE.MeshStandardMaterial({
-      color: 0x5F9EA0,
-      roughness: 0.85,
-    });
-    const cushion = new THREE.Mesh(cushionGeom, cushionMaterial);
-    cushion.position.set(0, 0.475, 0);
+    const cushionMat = new THREE.MeshStandardMaterial({ color: 0x6FBFCF, roughness: 0.85 });
+    const cushion = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 12), cushionMat);
+    cushion.position.set(0, 0.55, 0);
+    cushion.scale.set(1.5, 0.5, 1.3);
     group.add(cushion);
 
     return group;
   }
 
   /**
-   * Create a bar stool
-   * - Round seat
-   * - Tall pedestal base
-   * - Footrest
-   * - Color: Black metal with leather seat
+   * Bar Stool - Cute round seat with chrome base
    */
   private static createBarStool(): THREE.Object3D {
     const group = new THREE.Group();
 
-    // Seat (cylinder)
-    const seatGeom = new THREE.CylinderGeometry(0.3, 0.25, 0.1, 32);
-    const leatherMaterial = new THREE.MeshStandardMaterial({
-      color: 0x1a1a1a, // Near black
-      roughness: 0.6,
-      metalness: 0.1,
+    // Seat - puffy round cushion
+    const seatGeom = new THREE.SphereGeometry(0.3, 24, 16);
+    const seatMat = new THREE.MeshStandardMaterial({
+      color: 0xE8A87C, // Warm peach
+      roughness: 0.7,
+      metalness: 0.05,
     });
-    const seat = new THREE.Mesh(seatGeom, leatherMaterial);
-    seat.position.y = 1.2;
+    const seat = new THREE.Mesh(seatGeom, seatMat);
+    seat.position.y = 1.15;
+    seat.scale.set(1, 0.4, 1);
     seat.castShadow = true;
     group.add(seat);
 
-    // Center pole
-    const poleGeom = new THREE.CylinderGeometry(0.03, 0.04, 1.2, 16);
-    const metalMaterial = new THREE.MeshStandardMaterial({
-      color: 0x2a2a2a,
-      roughness: 0.3,
-      metalness: 0.8,
-    });
-    const pole = new THREE.Mesh(poleGeom, metalMaterial);
-    pole.position.y = 0.6;
+    // Chrome pole
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0xCCCCCC, roughness: 0.15, metalness: 0.9 });
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.035, 1.1, 12), poleMat);
+    pole.position.y = 0.55;
     pole.castShadow = true;
     group.add(pole);
 
-    // Footrest (ring)
-    const footrestGeom = new THREE.TorusGeometry(0.15, 0.02, 8, 32);
-    const footrest = new THREE.Mesh(footrestGeom, metalMaterial);
+    // Footrest ring
+    const footrest = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.015, 8, 24), poleMat);
     footrest.position.y = 0.4;
     footrest.rotation.x = Math.PI / 2;
     group.add(footrest);
 
-    // Base (flat cylinder)
-    const baseGeom = new THREE.CylinderGeometry(0.25, 0.3, 0.05, 32);
-    const base = new THREE.Mesh(baseGeom, metalMaterial);
-    base.position.y = 0.025;
+    // Base
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.28, 0.04, 24), poleMat);
+    base.position.y = 0.02;
     base.receiveShadow = true;
     group.add(base);
 
