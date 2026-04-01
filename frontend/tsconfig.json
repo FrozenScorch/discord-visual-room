@@ -26,6 +26,7 @@
     }
   },
   "include": ["src", "vite-env.d.ts"],
+  "exclude": ["src/monitoring/examples"],
   "references": [
     { "path": "../shared/types" }
   ]

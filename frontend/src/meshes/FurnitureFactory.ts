@@ -24,28 +24,6 @@ export class FurnitureFactory {
     return Array.from(this.meshes.keys());
   }
 
-  /** Rounded box helper using ExtrudeGeometry for soft edges */
-  private static roundedBox(w: number, h: number, d: number, r: number): THREE.BufferGeometry {
-    const shape = new THREE.Shape();
-    const hw = w / 2 - r;
-    const hd = d / 2 - r;
-    shape.moveTo(-hw, -hd);
-    shape.lineTo(hw, -hd);
-    shape.quadraticCurveTo(hw + r, -hd, hw + r, -hd + r);
-    shape.lineTo(hw + r, hd);
-    shape.quadraticCurveTo(hw + r, hd + r, hw, hd + r);
-    shape.lineTo(-hw, hd + r);
-    shape.quadraticCurveTo(-hw - r, hd + r, -hw - r, hd);
-    shape.lineTo(-hw - r, -hd);
-    shape.quadraticCurveTo(-hw - r, -hd - r + r, -hw, -hd);
-
-    const extrudeSettings = { depth: h, bevelEnabled: true, bevelThickness: r * 0.3, bevelSize: r * 0.3, bevelSegments: 3 };
-    const geom = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-    geom.rotateX(-Math.PI / 2);
-    geom.translate(0, h / 2, 0);
-    return geom;
-  }
-
   /**
    * Computer Desk - Warm wood with a tiny monitor and soft glow
    */
