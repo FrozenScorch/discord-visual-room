@@ -42,15 +42,15 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy sbt project files
-COPY build.sbt build.sbt
-COPY project/ project/
+COPY backend/scala/build.sbt build.sbt
+COPY backend/scala/project/ project/
 
 # Pre-download dependencies (cached layer)
 # This speeds up subsequent builds when dependencies haven't changed
 RUN sbt update
 
 # Copy source code (will be overridden by volume mount in compose)
-COPY src/ src/
+COPY backend/scala/src/ src/
 
 # Expose ports
 # 8080: WebSocket port

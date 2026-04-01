@@ -41,7 +41,7 @@ RUN apk add --no-cache \
     rm -rf /var/cache/apk/*
 
 # Copy package files first for better Docker layer caching
-COPY package*.json ./
+COPY frontend/package*.json ./
 
 # Check if this is part of a workspace (monorepo)
 # If so, we need to handle shared dependencies
@@ -57,11 +57,11 @@ RUN if grep -q '"workspace:' package.json; then \
 RUN npm install || pnpm install
 
 # Copy configuration files
-COPY tsconfig.json ./
-COPY vite.config.ts ./
+COPY frontend/tsconfig.json ./
+COPY frontend/vite.config.ts ./
 
 # Copy source code (will be overridden by volume mount in compose)
-COPY src ./src
+COPY frontend/src ./src
 
 # Expose Vite dev server port
 EXPOSE 8000

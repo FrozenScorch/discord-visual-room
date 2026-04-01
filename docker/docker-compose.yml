@@ -26,8 +26,8 @@ services:
   # ========================================================================
   backend:
     build:
-      context: ../backend/scala
-      dockerfile: ../../docker/backend/Dockerfile
+      context: ..
+      dockerfile: docker/backend/Dockerfile
       cache_from:
         - discord-visual-room-backend:latest
     image: discord-visual-room-backend:latest
@@ -99,8 +99,8 @@ services:
   # ========================================================================
   frontend:
     build:
-      context: ../frontend
-      dockerfile: ../../docker/frontend/Dockerfile
+      context: ..
+      dockerfile: docker/frontend/Dockerfile
       cache_from:
         - discord-visual-room-frontend:latest
       args:
@@ -110,8 +110,7 @@ services:
     restart: unless-stopped
 
     # Network mode: host (required by deployment constraints)
-    # Port mapping handled by host networking
-    # Container serves HTTP on port 80, mapped to 8000 on host via nginx config
+    # nginx listens on port 8000 directly (no port mapping with host network)
     network_mode: host
 
     environment:

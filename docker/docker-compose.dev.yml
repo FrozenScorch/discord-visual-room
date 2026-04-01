@@ -26,8 +26,8 @@ services:
   # ========================================================================
   backend-dev:
     build:
-      context: ../backend/scala
-      dockerfile: ../../docker/backend/Dockerfile.dev
+      context: ..
+      dockerfile: docker/backend/Dockerfile.dev
       cache_from:
         - discord-visual-room-backend:dev
     image: discord-visual-room-backend:dev
@@ -88,8 +88,8 @@ services:
   # ========================================================================
   frontend-dev:
     build:
-      context: ../frontend
-      dockerfile: ../../docker/frontend/Dockerfile.dev
+      context: ..
+      dockerfile: docker/frontend/Dockerfile.dev
       cache_from:
         - discord-visual-room-frontend:dev
       args:
