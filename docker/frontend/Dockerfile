@@ -16,7 +16,8 @@
 #   docker build -f docker/frontend/Dockerfile -t discord-visual-room-frontend:latest frontend
 #
 # Run:
-#   docker run -p 8000:80 discord-visual-room-frontend:latest
+#   docker run --network host discord-visual-room-frontend:latest
+#   (serves on port 8000 directly via host network)
 #
 # ========================================================================
 
@@ -49,7 +50,7 @@ RUN apk add --no-cache \
 
 # Copy package files first for better Docker layer caching
 # These change less frequently than source code
-COPY package*.json ./
+COPY frontend/package*.json ./
 
 # Check if this is part of a workspace (monorepo)
 # If so, we need to handle shared dependencies
@@ -65,9 +66,9 @@ RUN if grep -q '"workspace:' package.json; then \
 RUN npm ci --prefer-offline || pnpm install --frozen-lockfile
 
 # Copy source code
-COPY tsconfig.json ./
-COPY vite.config.ts ./
-COPY src ./src
+COPY frontend/tsconfig.json ./
+COPY frontend/vite.config.ts ./
+COPY frontend/src ./src
 
 # Build argument for backend WebSocket URL
 # This gets baked into the static files during build
@@ -132,7 +133,7 @@ COPY --from=builder /build/dist.sha256 /app/dist.sha256
 
 # Expose HTTP port
 # Note: In host network mode, this maps directly to host port
-EXPOSE 80
+EXPOSE 8000
 
 # ========================================================================
 # Health Check
@@ -140,7 +141,7 @@ EXPOSE 80
 # Simple HTTP GET request to verify nginx is serving content
 # ========================================================================
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:80/ || exit 1
+    CMD curl -f http://localhost:8000/ || exit 1
 
 # ========================================================================
 # nginx Runtime Configuration

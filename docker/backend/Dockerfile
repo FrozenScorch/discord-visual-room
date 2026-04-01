@@ -37,16 +37,16 @@ LABEL stage="builder"
 
 # Copy sbt project files first for better caching
 # These change less frequently than source code
-COPY project/build.properties project/build.properties
-COPY project/plugins.sbt project/plugins.sbt
-COPY build.sbt build.sbt
+COPY backend/scala/project/build.properties project/build.properties
+COPY backend/scala/project/plugins.sbt project/plugins.sbt
+COPY backend/scala/build.sbt build.sbt
 
 # Pre-download dependencies (cached layer)
 # This speeds up subsequent builds when dependencies haven't changed
 RUN sbt update
 
 # Copy source code
-COPY src ./src
+COPY backend/scala/src ./src
 
 # ========================================================================
 # Build the Application
