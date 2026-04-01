@@ -3,7 +3,8 @@
  * Captures unhandled errors, promise rejections, and provides error reporting
  */
 
-import type { ErrorContext, Alert, AlertSeverity } from '@discord-visual-room/monitoring';
+import type { ErrorContext, Alert } from '@discord-visual-room/monitoring';
+import { AlertSeverity } from '@discord-visual-room/monitoring';
 import { getLogger } from '../logging';
 import { getMetricsCollector } from '../metrics';
 
@@ -37,14 +38,14 @@ const DEFAULT_CONFIG: ErrorHandlerConfig = {
  * Error severity mapping
  */
 const ERROR_SEVERITY_MAP: Record<string, AlertSeverity> = {
-  Error: 'error',
-  TypeError: 'error',
-  ReferenceError: 'error',
-  SyntaxError: 'error',
-  RangeError: 'error',
-  URIError: 'warning',
-  EvalError: 'error',
-  Warning: 'warning',
+  Error: AlertSeverity.ERROR,
+  TypeError: AlertSeverity.ERROR,
+  ReferenceError: AlertSeverity.ERROR,
+  SyntaxError: AlertSeverity.ERROR,
+  RangeError: AlertSeverity.ERROR,
+  URIError: AlertSeverity.WARNING,
+  EvalError: AlertSeverity.ERROR,
+  Warning: AlertSeverity.WARNING,
 };
 
 /**
@@ -203,7 +204,7 @@ export class ErrorHandler {
    * Create alert from error context
    */
   private createAlert(errorContext: ErrorContext): Alert {
-    const severity = ERROR_SEVERITY_MAP[errorContext.type] || 'error';
+    const severity = ERROR_SEVERITY_MAP[errorContext.type] || AlertSeverity.ERROR;
 
     return {
       id: this.generateAlertId(),
