@@ -3,7 +3,8 @@
  * Provides consistent logging with levels and context
  */
 
-import type { LogLevel, LogEntry, LogContext, ErrorContext } from '@discord-visual-room/monitoring';
+import { LogLevel } from '@discord-visual-room/monitoring';
+import type { LogEntry, LogContext, ErrorContext } from '@discord-visual-room/monitoring';
 
 /**
  * Logger configuration
@@ -137,7 +138,7 @@ export class Logger {
       timestamp: new Date().toISOString(),
       level,
       service: this.config.service,
-      component: context?.component || 'frontend',
+      component: (context?.component as string) || 'frontend',
       message,
       context: {
         ...context,

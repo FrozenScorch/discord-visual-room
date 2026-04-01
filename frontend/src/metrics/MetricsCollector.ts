@@ -3,7 +3,7 @@
  * Tracks performance, errors, and usage metrics
  */
 
-import type { Metric, MetricType, Metrics, WebSocketMetrics, RoomMetrics, PerformanceData } from '@discord-visual-room/monitoring';
+import type { Metrics } from '@discord-visual-room/monitoring';
 
 /**
  * Metrics collector configuration
@@ -142,7 +142,7 @@ export class MetricsCollector {
    * Record an operation with timing
    */
   public async recordOperation<T>(
-    operationName: string,
+    _operationName: string,
     histogramName: keyof Metrics,
     fn: () => Promise<T> | T
   ): Promise<T> {
