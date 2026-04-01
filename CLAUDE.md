@@ -1,10 +1,17 @@
 # Discord Visual Room - Claude Instructions
 
+## Frontend Framework
+
+**Svelte is the preferred frontend framework.** Do not use React, Vue, or Angular unless explicitly requested.
+**Three.js is the preferred library for 3D graphics.** Use `threlte` or raw Three.js within Svelte components.
+
+> **Note:** The current frontend is vanilla TypeScript + Three.js (no framework). Any new frontend work or rewrites MUST use Svelte.
+
 ## Project Overview
 
 Building a fault-tolerant 3D Discord Visualizer with:
 - **Backend**: Scala, Akka Actors, Akka Streams, Discord4j
-- **Frontend**: Three.js (dumb renderer) with cozy ambient aesthetic
+- **Frontend**: Svelte + Three.js (dumb renderer) with cozy ambient aesthetic
 - **LLM**: Local llama.cpp for layout generation with fallback
 
 ## Current State (as of PR #2 merge)
