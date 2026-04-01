@@ -12,9 +12,8 @@ import { WSClient } from './WSClient';
 import type { SceneUpdateMessage } from './types';
 
 // Configuration
-// WebSocket URL - ensure it ends with /ws to match backend route
-const rawWsUrl = import.meta.env.VITE_WS_URL || import.meta.env.VITE_FRONTEND_WS_URL || 'ws://localhost:8080/ws';
-const WS_URL = rawWsUrl.endsWith('/ws') ? rawWsUrl : `${rawWsUrl}/ws`;
+// Socket.IO URL (http://, not ws:// - Socket.IO handles its own transport)
+const WS_URL = import.meta.env.VITE_WS_URL || import.meta.env.VITE_FRONTEND_WS_URL || 'http://localhost:8080';
 
 /**
  * Application class that manages the frontend
