@@ -1,19 +1,20 @@
-import { io, Socket } from 'socket.io-client';
 import type { SceneUpdateMessage, ConnectionState, WSMessage } from './types';
 
 /**
- * Socket.IO client for receiving SceneGraph updates from backend
+ * WebSocket client for receiving SceneGraph updates from backend
  *
  * Architecture: DUMB RENDERER
  * - Maintains NO state
  * - Receives complete scene state from backend
  * - Passes all data to SceneRenderer
- *
- * Uses Socket.IO to match the Node.js backend transport layer.
  */
 export class WSClient {
-  private socket: Socket | null = null;
-  private serverUrl: string;
+  private ws: WebSocket | null = null;
+  private wsUrl: string;
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 10;
+  private reconnectDelay: number = 1000;
+  private reconnectTimeout: number | null = null;
   private state: ConnectionState = 'disconnected';
 
   // Callbacks
@@ -22,57 +23,48 @@ export class WSClient {
   private onErrorCallback?: (error: Error) => void;
   private onSceneUpdateCallback?: (message: SceneUpdateMessage) => void;
 
-  constructor(serverUrl: string) {
-    // Socket.IO uses http:// URLs, not ws://
-    // Strip trailing /ws if present (Socket.IO handles its own path)
-    this.serverUrl = serverUrl.replace(/\/ws$/, '').replace(/^ws(s?):\/\//, 'http$1://');
+  constructor(wsUrl: string) {
+    this.wsUrl = wsUrl;
   }
 
   /**
-   * Connect to Socket.IO server
+   * Connect to WebSocket server
    */
   public connect(): void {
-    if (this.socket && this.socket.connected) {
-      console.log('Socket.IO already connected');
+    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+      console.log('WebSocket already connected or connecting');
       return;
     }
 
-    if (this.socket) {
-      // If socket exists but is disconnected, clean it up
-      this.socket.removeAllListeners();
-      this.socket = null;
-    }
-
     this.setState('connecting');
-    console.log(`Connecting to Socket.IO server: ${this.serverUrl}`);
+    console.log(`Connecting to WebSocket: ${this.wsUrl}`);
 
     try {
-      this.socket = io(this.serverUrl, {
-        transports: ['websocket', 'polling'],
-        reconnection: true,
-        reconnectionAttempts: 10,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 30000,
-      });
+      this.ws = new WebSocket(this.wsUrl);
 
-      this.socket.on('connect', this.handleConnect.bind(this));
-      this.socket.on('disconnect', this.handleDisconnect.bind(this));
-      this.socket.on('connect_error', this.handleConnectError.bind(this));
-      this.socket.on('SCENE_UPDATE', this.handleSceneUpdateEvent.bind(this));
-      this.socket.on('ERROR', this.handleErrorEvent.bind(this));
+      this.ws.onopen = this.handleOpen.bind(this);
+      this.ws.onmessage = this.handleMessage.bind(this);
+      this.ws.onerror = this.handleError.bind(this);
+      this.ws.onclose = this.handleClose.bind(this);
     } catch (error) {
-      console.error('Failed to create Socket.IO client:', error);
-      this.handleConnectionError(new Error('Failed to create Socket.IO connection'));
+      console.error('Failed to create WebSocket:', error);
+      this.handleConnectionError(new Error('Failed to create WebSocket connection'));
     }
   }
 
   /**
-   * Disconnect from Socket.IO server
+   * Disconnect from WebSocket server
    */
   public disconnect(): void {
-    if (this.socket) {
-      this.socket.disconnect();
-      this.socket = null;
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
+    if (this.ws) {
+      this.reconnectAttempts = this.maxReconnectAttempts; // Prevent auto-reconnect
+      this.ws.close();
+      this.ws = null;
     }
   }
 
@@ -112,11 +104,12 @@ export class WSClient {
   }
 
   /**
-   * Handle Socket.IO connect event
+   * Handle WebSocket open event
    */
-  private handleConnect(): void {
-    console.log(`Socket.IO connected (id: ${this.socket?.id})`);
+  private handleOpen(): void {
+    console.log('WebSocket connected');
     this.setState('connected');
+    this.reconnectAttempts = 0;
 
     if (this.onConnectCallback) {
       this.onConnectCallback();
@@ -124,16 +117,14 @@ export class WSClient {
   }
 
   /**
-   * Handle SCENE_UPDATE event from backend
-   *
-   * Backend emits: io.emit('SCENE_UPDATE', { type, timestamp, payload })
-   * Socket.IO delivers the data object directly as the first argument.
+   * Handle incoming WebSocket message
    */
-  private handleSceneUpdateEvent(data: unknown): void {
+  private handleMessage(event: MessageEvent): void {
     try {
-      const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+      const parsed = JSON.parse(event.data);
 
-      if (parsed && parsed.type === 'SCENE_UPDATE' && parsed.payload) {
+      // Handle wrapped message format: {"type": "SCENE_UPDATE", "timestamp": ..., "payload": {...}}
+      if (parsed.type === 'SCENE_UPDATE' && parsed.payload) {
         const message: SceneUpdateMessage = {
           type: 'SCENE_UPDATE',
           timestamp: parsed.timestamp || Date.now(),
@@ -143,8 +134,30 @@ export class WSClient {
         return;
       }
 
+      // Handle other wrapped message types
+      if (parsed.type) {
+        const message = parsed as WSMessage;
+        switch (message.type) {
+          case 'USER_JOINED':
+          case 'USER_LEFT':
+          case 'USER_MOVED':
+          case 'ACTIVITY_CHANGED':
+            console.log(`Received ${message.type} (handled by SCENE_UPDATE)`);
+            break;
+          case 'ERROR':
+            console.error('Server error:', message.payload);
+            if (this.onErrorCallback) {
+              this.onErrorCallback(new Error(String(message.payload)));
+            }
+            break;
+          default:
+            console.warn('Unknown message type:', message.type);
+        }
+        return;
+      }
+
       // Handle raw SceneGraph (no wrapper) as fallback
-      if (parsed && parsed.version && parsed.users !== undefined && parsed.furniture !== undefined) {
+      if (parsed.version && parsed.users !== undefined && parsed.furniture !== undefined) {
         const message: SceneUpdateMessage = {
           type: 'SCENE_UPDATE',
           timestamp: parsed.timestamp || Date.now(),
@@ -154,19 +167,9 @@ export class WSClient {
         return;
       }
 
-      console.warn('Unrecognized SCENE_UPDATE payload format:', parsed);
+      console.warn('Unrecognized WebSocket message format:', parsed);
     } catch (error) {
-      console.error('Failed to parse SCENE_UPDATE message:', error);
-    }
-  }
-
-  /**
-   * Handle ERROR event from backend
-   */
-  private handleErrorEvent(data: unknown): void {
-    console.error('Server error event:', data);
-    if (this.onErrorCallback) {
-      this.onErrorCallback(new Error(String(data)));
+      console.error('Failed to parse WebSocket message:', error);
     }
   }
 
@@ -180,24 +183,47 @@ export class WSClient {
   }
 
   /**
-   * Handle Socket.IO disconnect event
+   * Handle WebSocket error
    */
-  private handleDisconnect(reason: string): void {
+  private handleError(_event: Event): void {
+    console.error('WebSocket error:', _event);
+    this.handleConnectionError(new Error('WebSocket connection error'));
+  }
+
+  /**
+   * Handle WebSocket close
+   */
+  private handleClose(_event: CloseEvent): void {
     const wasConnected = this.state === 'connected';
     this.setState('disconnected');
-    console.log(`Socket.IO disconnected: ${reason}`);
 
     if (wasConnected && this.onDisconnectCallback) {
       this.onDisconnectCallback();
     }
+
+    // Attempt to reconnect if not intentionally disconnected
+    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.scheduleReconnect();
+    } else {
+      console.error('Max reconnect attempts reached');
+      this.setState('error');
+    }
   }
 
   /**
-   * Handle Socket.IO connection error
+   * Schedule reconnection attempt
    */
-  private handleConnectError(error: Error): void {
-    console.error('Socket.IO connection error:', error.message);
-    this.handleConnectionError(new Error(`Socket.IO connection error: ${error.message}`));
+  private scheduleReconnect(): void {
+    this.reconnectAttempts++;
+
+    // Exponential backoff
+    const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 30000);
+
+    console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+
+    this.reconnectTimeout = window.setTimeout(() => {
+      this.connect();
+    }, delay);
   }
 
   /**
@@ -210,6 +236,11 @@ export class WSClient {
     if (this.onErrorCallback) {
       this.onErrorCallback(error);
     }
+
+    // Schedule reconnect
+    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.scheduleReconnect();
+    }
   }
 
   /**
@@ -217,24 +248,24 @@ export class WSClient {
    */
   private setState(newState: ConnectionState): void {
     if (this.state !== newState) {
-      console.log(`Socket.IO state: ${this.state} -> ${newState}`);
+      console.log(`WebSocket state: ${this.state} -> ${newState}`);
       this.state = newState;
     }
   }
 
   /**
-   * Send a message to the server (for PING, GUILD_SELECT, etc.)
+   * Send a message to the server (if needed for future features)
    */
   public send(type: string, payload: unknown): void {
-    if (this.socket && this.socket.connected) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       const message: WSMessage = {
         type: type as any,
         timestamp: Date.now(),
         payload,
       };
-      this.socket.emit(type, message);
+      this.ws.send(JSON.stringify(message));
     } else {
-      console.warn('Cannot send message: Socket.IO not connected');
+      console.warn('Cannot send message: WebSocket not connected');
     }
   }
 }
