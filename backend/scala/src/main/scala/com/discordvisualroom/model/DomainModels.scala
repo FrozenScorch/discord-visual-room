@@ -307,13 +307,11 @@ object GuildSceneGraph {
 case class AppConfig(
   discord: DiscordConfig,
   llm: LLMConfig,
-  websocket: WebSocketConfig,
-  room: RoomConfig
+  websocket: WebSocketConfig
 )
 
 case class DiscordConfig(
   token: String,
-  voiceChannelId: String,
   guildId: String
 )
 

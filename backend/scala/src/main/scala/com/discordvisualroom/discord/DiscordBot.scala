@@ -1,24 +1,27 @@
 package com.discordvisualroom.discord
 
 import akka.actor.typed.ActorRef
-import com.discordvisualroom.actors.RoomActor
+import com.discordvisualroom.actors.GuildManager
 import com.discordvisualroom.model._
 import com.typesafe.scalalogging.LazyLogging
 import discord4j.common.util.Snowflake
-import discord4j.core.{DiscordClient, DiscordClientBuilder}
-import discord4j.core.`object`.entity.{Member, User}
-import discord4j.core.`object`.presence.{Activity, Presence}
+import discord4j.core.DiscordClientBuilder
+import discord4j.core.`object`.entity.Member
+import discord4j.core.`object`.presence.Activity
 import discord4j.core.event.domain.VoiceStateUpdateEvent
 import discord4j.core.event.domain.lifecycle.ReadyEvent
+import discord4j.core.event.domain.PresenceUpdateEvent
 
+import scala.collection.immutable
 import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.jdk.CollectionConverters._
 import scala.jdk.OptionConverters._
-import scala.util.{Failure, Success, Try}
+import scala.util.Try
 
 /**
  * Discord bot integration using discord4j
  * Listens to voice channel events and tracks user activities
+ * Auto-discovers all channels from the guild and routes events to GuildManager
  */
 object DiscordBot extends LazyLogging {
 
@@ -27,9 +30,8 @@ object DiscordBot extends LazyLogging {
    */
   def start(
     token: String,
-    voiceChannelId: String,
     guildId: String,
-    roomActor: ActorRef[RoomActor.Command]
+    guildManager: ActorRef[GuildManager.Command]
   )(implicit ec: ExecutionContext): Future[Unit] = {
 
     logger.info("Starting Discord bot...")
@@ -49,20 +51,26 @@ object DiscordBot extends LazyLogging {
 
       val eventDispatcher = gateway.getEventDispatcher
 
-      // Handle ready event
+      // Handle ready event - discover guild and all channels
       eventDispatcher.on(classOf[ReadyEvent]).subscribe { event =>
         val self = event.getSelf
         logger.info(s"Bot logged in as: ${self.getUsername}#${self.getDiscriminator}")
+        discoverGuild(gateway, guildId, guildManager)
         promise.trySuccess(())
       }
 
-      // Handle voice state updates (users joining/leaving voice channel)
+      // Handle voice state updates (users joining/leaving ANY voice channel)
       eventDispatcher.on(classOf[VoiceStateUpdateEvent]).subscribe { event =>
-        handleVoiceStateUpdate(event, voiceChannelId, guildId, roomActor)
+        handleVoiceStateUpdate(event, guildId, guildManager)
       }
 
-      // Initial sync of users in voice channel
-      syncInitialVoiceState(gateway, voiceChannelId, guildId, roomActor)
+      // Handle presence updates (activity changes)
+      eventDispatcher.on(classOf[PresenceUpdateEvent]).subscribe { event =>
+        handlePresenceUpdate(event, guildId, guildManager)
+      }
+
+      // Initial sync of all voice states across the guild
+      syncInitialVoiceState(gateway, guildId, guildManager)
 
       // Ensure promise completes even if ReadyEvent was already fired
       Future {
@@ -80,42 +88,137 @@ object DiscordBot extends LazyLogging {
   }
 
   /**
-   * Handle voice state update events
+   * Discover the guild: fetch all channels, roles, members, and send GuildDiscovered to GuildManager
+   */
+  private def discoverGuild(
+    gateway: discord4j.core.GatewayDiscordClient,
+    guildId: String,
+    guildManager: ActorRef[GuildManager.Command]
+  ): Unit = {
+    Try {
+      val guild = gateway.getGuildById(Snowflake.of(guildId)).block()
+      if (guild == null) {
+        logger.error(s"Could not find guild: $guildId")
+        return
+      }
+
+      val name = guild.getName
+      val iconUrl = guild.getIconUrl(discord4j.rest.util.Image.Format.PNG).toScala
+      val guildSnowflake = guild.getId.asString()
+
+      logger.info(s"Discovered guild: $name (id=$guildSnowflake)")
+
+      // Fetch all channels
+      val allChannels = guild.getChannels.collectList().block()
+      val channels = if (allChannels != null) allChannels.asScala.toSeq else Seq.empty
+
+      val voiceChannels: immutable.Seq[(String, String, Int)] = channels.flatMap { ch =>
+        ch.getType match {
+          case discord4j.core.`object`.entity.channel.Channel.Type.GUILD_VOICE =>
+            val pos = Option(ch.getPosition.block()).map(_.intValue()).getOrElse(0)
+            Some((ch.getId.asString(), ch.getName, pos))
+          case _ => None
+        }
+      }.sortBy(_._3)
+
+      val textChannels: immutable.Seq[(String, String, Int)] = channels.flatMap { ch =>
+        ch.getType match {
+          case discord4j.core.`object`.entity.channel.Channel.Type.GUILD_TEXT =>
+            val pos = Option(ch.getPosition.block()).map(_.intValue()).getOrElse(0)
+            Some((ch.getId.asString(), ch.getName, pos))
+          case _ => None
+        }
+      }.sortBy(_._3)
+
+      logger.info(s"Found ${voiceChannels.size} voice channels, ${textChannels.size} text channels")
+
+      // Build GuildInfo
+      val members = guild.getMembers.collectList().block()
+      val onlineCount = if (members != null) {
+        members.asScala.count { m =>
+          val presence = m.getPresence.block()
+          presence != null && !presence.getStatus.equals(discord4j.core.`object`.presence.Status.OFFLINE)
+        }
+      } else 0
+
+      val roles = guild.getRoles.collectList().block()
+      val guildRoles: immutable.Seq[GuildRole] = if (roles != null) {
+        roles.asScala.toSeq.map { r =>
+          val colorInt = r.getColor.getRGB
+          val position = r.getPosition.block()
+          GuildRole(r.getId.asString(), r.getName, colorInt, if (position != null) position else 0)
+        }
+      } else Seq.empty
+
+      val guildInfo = GuildInfo(
+        id = guildSnowflake,
+        name = name,
+        icon = iconUrl,
+        roles = guildRoles,
+        onlineMemberCount = onlineCount
+      )
+
+      guildManager ! GuildManager.GuildDiscovered(guildInfo, voiceChannels, textChannels)
+      logger.info(s"GuildDiscovered sent to GuildManager for '$name'")
+
+    }.recover {
+      case ex: Exception =>
+        logger.error(s"Failed to discover guild $guildId", ex)
+    }
+  }
+
+  /**
+   * Handle voice state update events - route to GuildManager for any voice channel
    */
   private def handleVoiceStateUpdate(
     event: VoiceStateUpdateEvent,
-    targetVoiceChannelId: String,
     guildId: String,
-    roomActor: ActorRef[RoomActor.Command]
+    guildManager: ActorRef[GuildManager.Command]
   ): Unit = {
 
     Try {
       val newState = event.getCurrent
       val oldState = event.getOld
 
+      // Only handle events for our guild
+      val eventGuildId = newState.getGuildId.asString()
+      if (eventGuildId != guildId) return
+
       val newChannelId = newState.getChannelId.toScala.map(_.asString())
       val oldChannelId = oldState.toScala.flatMap(_.getChannelId.toScala.map(_.asString()))
 
       val userId = newState.getUserId.asString()
 
-      // User joined our target channel
-      if (newChannelId.contains(targetVoiceChannelId) && !oldChannelId.contains(targetVoiceChannelId)) {
-        logger.info(s"User $userId joined voice channel $targetVoiceChannelId")
+      // User joined a voice channel (newChannelId is set, oldChannelId is None or different)
+      if (newChannelId.isDefined && newChannelId != oldChannelId) {
+        val chId = newChannelId.get
+        logger.info(s"User $userId joined voice channel $chId")
         Try {
           val member = newState.getMember.block()
           if (member != null) {
-            handleUserJoined(member, roomActor)
+            handleUserJoinedVoiceChannel(member, chId, guildManager)
           }
         }.recover {
           case ex: Exception =>
             logger.error(s"Failed to get member for user $userId", ex)
         }
       }
-      // User left our target channel
-      else if (oldChannelId.contains(targetVoiceChannelId) && !newChannelId.contains(targetVoiceChannelId)) {
-        logger.info(s"User $userId left voice channel $targetVoiceChannelId")
-        roomActor ! RoomActor.UserLeft(userId)
+
+      // User left a voice channel (oldChannelId is set, newChannelId is None or different)
+      if (oldChannelId.isDefined && oldChannelId != newChannelId) {
+        val chId = oldChannelId.get
+        logger.info(s"User $userId left voice channel $chId")
+        guildManager ! GuildManager.UserLeftVoiceChannel(userId, chId)
       }
+
+      // Speaking state change - detect mute/deafen changes for users in voice
+      val wasSpeaking = oldState.toScala.exists(s => !s.isSelfMuted && !s.isSelfDeaf)
+      val isNowSpeaking = !newState.isSelfMuted && !newState.isSelfDeaf
+
+      if (wasSpeaking != isNowSpeaking && newChannelId.isDefined) {
+        guildManager ! GuildManager.UserSpeakingChanged(userId, newChannelId.get, isNowSpeaking)
+      }
+
     }.recover {
       case ex: Exception =>
         logger.error("Error handling voice state update", ex)
@@ -123,30 +226,78 @@ object DiscordBot extends LazyLogging {
   }
 
   /**
-   * Handle user joining voice channel
+   * Handle presence update events (activity changes)
    */
-  private def handleUserJoined(member: Member, roomActor: ActorRef[RoomActor.Command]): Unit = {
+  private def handlePresenceUpdate(
+    event: PresenceUpdateEvent,
+    guildId: String,
+    guildManager: ActorRef[GuildManager.Command]
+  ): Unit = {
+    Try {
+      // Only handle events for our guild
+      val eventGuildId: String = event.getGuildId.asString()
+      if (eventGuildId != guildId) return
+
+      val userId = event.getUserId.asString()
+
+      val presence = event.getCurrent
+      if (presence == null) return
+
+      val activities = presence.getActivities.asScala.toSeq
+      val activity = activities.headOption.map { discordActivity =>
+        UserActivity(
+          name = discordActivity.getName,
+          activityType = mapActivityType(discordActivity.getType),
+          details = Option(discordActivity.getDetails).flatMap(d => Option(d.toString)),
+          state = Option(discordActivity.getState).flatMap(s => Option(s.toString))
+        )
+      }
+
+      // Find which voice channel the user is in (from current voice states)
+      // We rely on the voice state to have the channel; if not in voice, ignore activity change
+      // The GuildManager will look up the user's channel internally
+      val currentGuild = event.getClient.getGuildById(Snowflake.of(guildId)).block()
+      if (currentGuild == null) return
+
+      val voiceStates = currentGuild.getVoiceStates.collectList().block()
+      val userVoiceState = if (voiceStates != null) {
+        voiceStates.asScala.find(_.getUserId.asString() == userId)
+      } else None
+
+      val channelIdOpt = userVoiceState.flatMap(vs => vs.getChannelId.toScala.map(_.asString()))
+
+      channelIdOpt.foreach { channelId =>
+        guildManager ! GuildManager.UserActivityChanged(userId, channelId, activity)
+      }
+
+    }.recover {
+      case ex: Exception =>
+        logger.error("Error handling presence update", ex)
+    }
+  }
+
+  /**
+   * Handle user joining a voice channel
+   */
+  private def handleUserJoinedVoiceChannel(member: Member, channelId: String, guildManager: ActorRef[GuildManager.Command]): Unit = {
     Try {
       val userId = member.getId.asString()
       val username = member.getUsername
       val displayName = member.getDisplayName
       val avatarUrl = member.getAvatarUrl
+      val activity = extractActivity(member)
 
-      val userNode = UserNode(
-        id = userId,
+      guildManager ! GuildManager.UserJoinedVoiceChannel(
+        userId = userId,
+        channelId = channelId,
         username = username,
         displayName = displayName,
-        avatar = avatarUrl,
-        position = Vector3D(0, 0, 0),
-        rotation = Vector3D(0, 0, 0),
-        activity = extractActivity(member),
-        isSpeaking = false
+        avatarUrl = avatarUrl,
+        activity = activity
       )
-
-      roomActor ! RoomActor.UserJoined(userNode)
     }.recover {
       case ex: Exception =>
-        logger.error(s"Failed to create UserNode for member", ex)
+        logger.error(s"Failed to handle user joined voice channel", ex)
     }
   }
 
@@ -185,16 +336,15 @@ object DiscordBot extends LazyLogging {
   }
 
   /**
-   * Sync initial voice state (users already in the channel when bot starts)
+   * Sync initial voice state - iterate ALL existing voice states and send them as joins to GuildManager
    */
   private def syncInitialVoiceState(
     gateway: discord4j.core.GatewayDiscordClient,
-    voiceChannelId: String,
     guildId: String,
-    roomActor: ActorRef[RoomActor.Command]
+    guildManager: ActorRef[GuildManager.Command]
   ): Unit = {
 
-    logger.info("Syncing initial voice state...")
+    logger.info("Syncing initial voice state for guild...")
 
     Try {
       val guild = gateway.getGuildById(Snowflake.of(guildId)).block()
@@ -209,17 +359,31 @@ object DiscordBot extends LazyLogging {
         return
       }
 
-      val channelUsers = voiceStates.asScala.filter { vs =>
-        vs.getChannelId.toScala.map(_.asString()).contains(voiceChannelId)
+      val usersInVoice = voiceStates.asScala.filter { vs =>
+        vs.getChannelId.toScala.isDefined
       }
 
-      logger.info(s"Found ${channelUsers.size} users in voice channel $voiceChannelId")
+      logger.info(s"Found ${usersInVoice.size} users in voice channels across guild")
 
-      channelUsers.foreach { voiceState =>
+      usersInVoice.foreach { voiceState =>
         Try {
+          val channelId = voiceState.getChannelId.toScala.map(_.asString()).get
           val member = voiceState.getMember.block()
           if (member != null) {
-            handleUserJoined(member, roomActor)
+            val userId = member.getId.asString()
+            val username = member.getUsername
+            val displayName = member.getDisplayName
+            val avatarUrl = member.getAvatarUrl
+            val activity = extractActivity(member)
+
+            guildManager ! GuildManager.UserJoinedVoiceChannel(
+              userId = userId,
+              channelId = channelId,
+              username = username,
+              displayName = displayName,
+              avatarUrl = avatarUrl,
+              activity = activity
+            )
           }
         }.recover {
           case ex: Exception =>
@@ -232,13 +396,3 @@ object DiscordBot extends LazyLogging {
     }
   }
 }
-
-/**
- * Configuration for Discord bot
- */
-case class DiscordBotConfig(
-  token: String,
-  voiceChannelId: String,
-  guildId: String,
-  commandPrefix: String = "!"
-)

@@ -4,8 +4,6 @@ import com.discordvisualroom.model._
 import org.json4s._
 import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
-import org.json4s.jackson.Serialization
-import org.json4s.jackson.Serialization.write
 
 import scala.collection.immutable.Seq
 
@@ -80,6 +78,82 @@ object JsonSerializers {
         ("room" -> writeRoomConfig(sceneGraph.room))
 
     compact(render(json))
+  }
+
+  /**
+   * Write GuildSceneGraph to JSON string
+   */
+  def writeGuildSceneGraph(scene: GuildSceneGraph): String = {
+    import org.json4s.JsonDSL._
+    import org.json4s.jackson.JsonMethods._
+
+    val json: JObject =
+      ("version" -> scene.version) ~
+        ("timestamp" -> scene.timestamp) ~
+        ("guild" -> writeGuildInfo(scene.guild)) ~
+        ("rooms" -> scene.rooms.map(writeRoomData)) ~
+        ("roomsMeta" -> scene.roomsMeta.map(writeRoomMeta))
+
+    compact(render(json))
+  }
+
+  /**
+   * Write GuildInfo to JObject
+   */
+  def writeGuildInfo(info: GuildInfo): JObject = {
+    ("id" -> info.id) ~
+      ("name" -> info.name) ~
+      ("icon" -> info.icon) ~
+      ("roles" -> info.roles.map(writeGuildRole)) ~
+      ("onlineMemberCount" -> info.onlineMemberCount)
+  }
+
+  /**
+   * Write RoomData to JObject
+   */
+  def writeRoomData(room: RoomData): JObject = {
+    ("id" -> room.id) ~
+      ("name" -> room.name) ~
+      ("channelType" -> writeChannelType(room.channelType)) ~
+      ("position" -> writeRoomPosition(room.position)) ~
+      ("users" -> room.users.map(writeUserNode)) ~
+      ("furniture" -> room.furniture.map(writeFurnitureNode))
+  }
+
+  /**
+   * Write RoomMeta to JObject
+   */
+  def writeRoomMeta(meta: RoomMeta): JObject = {
+    ("id" -> meta.id) ~
+      ("name" -> meta.name) ~
+      ("channelType" -> writeChannelType(meta.channelType)) ~
+      ("position" -> meta.position.map(writeRoomPosition)) ~
+      ("userCount" -> meta.userCount)
+  }
+
+  /**
+   * Write RoomPosition to JObject
+   */
+  def writeRoomPosition(pos: RoomPosition): JObject = {
+    ("x" -> pos.x) ~
+      ("z" -> pos.z)
+  }
+
+  /**
+   * Write ChannelType to JString
+   */
+  def writeChannelType(ct: ChannelType): JString = {
+    JString(ct.typeName)
+  }
+
+  /**
+   * Write GuildRole to JObject
+   */
+  def writeGuildRole(role: GuildRole): JObject = {
+    ("id" -> role.id) ~
+      ("name" -> role.name) ~
+      ("color" -> role.color) ~
+      ("position" -> role.position)
   }
 
   private def writeUserNode(user: UserNode): JObject = {

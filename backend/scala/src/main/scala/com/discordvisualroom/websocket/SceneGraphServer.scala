@@ -3,7 +3,6 @@ package com.discordvisualroom.websocket
 import akka.Done
 import akka.NotUsed
 import akka.actor.typed.{ActorRef, ActorSystem}
-import akka.actor.typed.scaladsl.{Behaviors, ActorContext}
 import akka.actor.typed.scaladsl.AskPattern._
 import akka.actor.typed.scaladsl.adapter._
 import akka.http.scaladsl.Http
@@ -11,10 +10,10 @@ import akka.http.scaladsl.model.ws.{Message, TextMessage}
 import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
-import akka.stream.scaladsl.{Flow, Sink, Source, BroadcastHub, Keep, MergeHub}
-import akka.stream.{CompletionStrategy, OverflowStrategy}
+import akka.stream.scaladsl.{Flow, Sink, Source}
+import akka.stream.OverflowStrategy
 import akka.util.Timeout
-import com.discordvisualroom.actors.RoomActor
+import com.discordvisualroom.actors.GuildManager
 import com.discordvisualroom.model._
 import com.discordvisualroom.serialization.JsonSerializers
 import com.typesafe.scalalogging.LazyLogging
@@ -23,7 +22,7 @@ import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
 
 /**
- * WebSocket server for streaming SceneGraph updates to frontend clients
+ * WebSocket server for streaming GuildSceneGraph updates to frontend clients
  */
 object SceneGraphServer extends LazyLogging {
 
@@ -33,12 +32,12 @@ object SceneGraphServer extends LazyLogging {
   def start(
     host: String,
     port: Int,
-    roomActor: ActorRef[RoomActor.Command]
+    guildManager: ActorRef[GuildManager.Command]
   )(implicit system: ActorSystem[Nothing], ec: ExecutionContext): Future[Http.ServerBinding] = {
 
     logger.info(s"Starting WebSocket server on $host:$port")
 
-    val route = createRoute(roomActor)
+    val route = createRoute(guildManager)
 
     Http()
       .newServerAt(host, port)
@@ -48,7 +47,7 @@ object SceneGraphServer extends LazyLogging {
   /**
    * Create HTTP route with WebSocket endpoint and CORS
    */
-  private def createRoute(roomActor: ActorRef[RoomActor.Command])(implicit system: ActorSystem[Nothing]): Route = {
+  private def createRoute(guildManager: ActorRef[GuildManager.Command])(implicit system: ActorSystem[Nothing]): Route = {
     // CORS headers for frontend
     respondWithHeaders(
       akka.http.scaladsl.model.headers.`Access-Control-Allow-Origin`.*,
@@ -59,7 +58,7 @@ object SceneGraphServer extends LazyLogging {
     ) {
       path("ws") {
         get {
-          handleWebSocketMessages(createWebSocketFlow(roomActor))
+          handleWebSocketMessages(createWebSocketFlow(guildManager))
         }
       } ~
       path("health") {
@@ -70,9 +69,9 @@ object SceneGraphServer extends LazyLogging {
       path("scene") {
         get {
           implicit val timeout: Timeout = 3.seconds
-          val sceneFuture = roomActor.ask(ref => RoomActor.GetCurrentSceneGraph(ref))
-          onSuccess(sceneFuture) { sceneUpdate =>
-            val json = wrapSceneUpdateMessage(sceneUpdate.sceneGraph)
+          val sceneFuture = guildManager.ask(ref => GuildManager.GetGuildScene(ref))
+          onSuccess(sceneFuture) { sceneGraph =>
+            val json = wrapGuildSceneUpdateMessage(sceneGraph)
             complete(StatusCodes.OK, json)
           }
         }
@@ -84,15 +83,15 @@ object SceneGraphServer extends LazyLogging {
    * Create a WebSocket flow for a single client connection.
    *
    * Uses an ActorRef-based Source to push scene updates to the client.
-   * The actor subscribes to the RoomActor for scene updates.
+   * The actor subscribes to the GuildManager for guild-level scene updates.
    */
   private def createWebSocketFlow(
-    roomActor: ActorRef[RoomActor.Command]
+    guildManager: ActorRef[GuildManager.Command]
   )(implicit system: ActorSystem[Nothing]): Flow[Message, Message, Any] = {
 
     // Create an actor-backed source that will push messages to the WebSocket
     val (outActorUntyped, outSource) = Source
-      .actorRef[RoomActor.SceneGraphUpdate](
+      .actorRef[GuildSceneGraph](
         completionMatcher = PartialFunction.empty,
         failureMatcher = PartialFunction.empty,
         bufferSize = 64,
@@ -100,15 +99,15 @@ object SceneGraphServer extends LazyLogging {
       )
       .preMaterialize()
 
-    // Convert untyped ActorRef to typed ActorRef[SceneGraphUpdate]
-    val outActor: ActorRef[RoomActor.SceneGraphUpdate] = outActorUntyped.toTyped
+    // Convert untyped ActorRef to typed ActorRef[GuildSceneGraph]
+    val outActor: ActorRef[GuildSceneGraph] = outActorUntyped.toTyped
 
-    // Subscribe this client's output actor to room updates
-    roomActor ! RoomActor.SubscribeToSceneUpdates(outActor)
+    // Subscribe this client's output actor to guild updates
+    guildManager ! GuildManager.SubscribeToUpdates(outActor)
 
-    // Convert SceneGraphUpdate to WebSocket TextMessage with proper envelope
-    val outMessages: Source[Message, NotUsed] = outSource.map { sceneUpdate =>
-      val json = wrapSceneUpdateMessage(sceneUpdate.sceneGraph)
+    // Convert GuildSceneGraph to WebSocket TextMessage with proper envelope
+    val outMessages: Source[Message, NotUsed] = outSource.map { sceneGraph =>
+      val json = wrapGuildSceneUpdateMessage(sceneGraph)
       TextMessage.Strict(json): Message
     }
 
@@ -126,7 +125,7 @@ object SceneGraphServer extends LazyLogging {
       // When client disconnects, unsubscribe
       future.onComplete { _ =>
         logger.info("WebSocket client disconnected, unsubscribing")
-        roomActor ! RoomActor.UnsubscribeFromSceneUpdates(outActor)
+        guildManager ! GuildManager.UnsubscribeFromUpdates(outActor)
       }(system.executionContext)
       future
     }
@@ -135,11 +134,11 @@ object SceneGraphServer extends LazyLogging {
   }
 
   /**
-   * Wrap a SceneGraph in the WebSocket message envelope the frontend expects:
+   * Wrap a GuildSceneGraph in the WebSocket message envelope the frontend expects:
    * {"type": "SCENE_UPDATE", "timestamp": ..., "payload": {...}}
    */
-  private def wrapSceneUpdateMessage(sceneGraph: SceneGraph): String = {
-    val sceneJson = JsonSerializers.writeSceneGraph(sceneGraph)
+  private def wrapGuildSceneUpdateMessage(sceneGraph: GuildSceneGraph): String = {
+    val sceneJson = JsonSerializers.writeGuildSceneGraph(sceneGraph)
     s"""{"type":"SCENE_UPDATE","timestamp":${System.currentTimeMillis()},"payload":$sceneJson}"""
   }
 }
