@@ -43,17 +43,56 @@ object RoomActor extends LazyLogging {
   final case class SceneGraphUpdate(sceneGraph: SceneGraph)
 
   def apply(llmConfig: LLMConfig): Behavior[Command] =
-    Behaviors.setup(context => new RoomActor(context, llmConfig))
+    Behaviors.setup(context => new RoomActor(context, llmConfig, None))
+
+  /**
+   * Create a RoomActor with a parent GuildManager that receives state updates.
+   * Used when RoomActor is managed by GuildManager for multi-room guild visualization.
+   * The roomConfig is set immediately (no separate Initialize message needed).
+   */
+  def apply(
+    roomConfig: RoomConfig,
+    llmConfig: LLMConfig,
+    parentRef: ActorRef[GuildManager.Command]
+  ): Behavior[Command] = Behaviors.setup(context => {
+    val actor = new RoomActor(context, llmConfig, Some(parentRef))
+    actor.roomConfig = Some(roomConfig)
+    actor
+  })
 }
 
 class RoomActor(
   context: ActorContext[RoomActor.Command],
-  llmConfig: LLMConfig
+  llmConfig: LLMConfig,
+  parentRef: Option[ActorRef[GuildManager.Command]]
 ) extends AbstractBehavior[RoomActor.Command](context) with LazyLogging {
 
   import RoomActor._
 
   private implicit val ec: ExecutionContextExecutor = context.executionContext
+
+  /**
+   * Notify parent GuildManager of current state change.
+   * Safe to call even when parentRef is None (standalone mode).
+   */
+  private def notifyParent(): Unit = {
+    parentRef.foreach { ref =>
+      val config = roomConfig.getOrElse(
+        RoomConfig(id = "uninitialized", name = "Uninitialized", dimensions = RoomDimensions(10, 3, 10), maxUsers = 10)
+      )
+      // Position users at their assigned furniture before reporting
+      val positionedUsers = cachedUsers.map { user =>
+        val furniturePos = cachedFurniture
+          .find(_.assignedUserId.contains(user.id))
+          .map(f => f.position.copy(y = 0, z = f.position.z + 1.0))
+        user.copy(
+          position = furniturePos.getOrElse(user.position),
+          currentFurnitureId = cachedFurniture.find(_.assignedUserId.contains(user.id)).map(_.id)
+        )
+      }
+      ref ! GuildManager.RoomStateUpdate(config.id, positionedUsers, cachedFurniture)
+    }
+  }
 
   // Child actors
   private val userManager: ActorRef[UserManager.Command] = context.spawn(
@@ -305,9 +344,10 @@ class RoomActor(
   }
 
   /**
-   * Broadcast scene graph to all subscribers
+   * Broadcast scene graph to all subscribers and notify parent GuildManager
    */
   private def broadcastSceneUpdate(): Unit = {
+    notifyParent()
     if (subscribers.nonEmpty) {
       context.self ! NotifySubscribers
     }
