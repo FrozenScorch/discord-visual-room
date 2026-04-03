@@ -2,6 +2,7 @@ package com.discordvisualroom.serialization
 
 import com.discordvisualroom.model._
 import org.json4s._
+import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
 import org.json4s.jackson.Serialization
 import org.json4s.jackson.Serialization.write

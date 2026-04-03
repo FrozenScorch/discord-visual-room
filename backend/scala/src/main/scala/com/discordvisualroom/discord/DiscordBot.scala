@@ -188,7 +188,7 @@ object DiscordBot extends LazyLogging {
    * Sync initial voice state (users already in the channel when bot starts)
    */
   private def syncInitialVoiceState(
-    gateway: discord4j.gateway.GatewayDiscordClient,
+    gateway: discord4j.core.GatewayDiscordClient,
     voiceChannelId: String,
     guildId: String,
     roomActor: ActorRef[RoomActor.Command]
