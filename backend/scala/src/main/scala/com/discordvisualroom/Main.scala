@@ -2,20 +2,19 @@ package com.discordvisualroom
 
 import akka.actor.typed.ActorSystem
 import akka.actor.typed.scaladsl.Behaviors
-import com.discordvisualroom.actors.RoomActor
+import com.discordvisualroom.actors.GuildManager
 import com.discordvisualroom.discord.DiscordBot
 import com.discordvisualroom.model._
 import com.discordvisualroom.websocket.SceneGraphServer
 import com.typesafe.scalalogging.LazyLogging
 
 import scala.concurrent.ExecutionContextExecutor
-import scala.concurrent.duration._
 import scala.io.StdIn
 import scala.util.{Failure, Success}
 
 /**
  * Main entry point for Discord Visual Room backend
- * Bootstraps actor system, Discord bot, and WebSocket server
+ * Bootstraps actor system, GuildManager, Discord bot, and WebSocket server
  */
 object Main extends LazyLogging {
 
@@ -31,20 +30,17 @@ object Main extends LazyLogging {
     implicit val system: ActorSystem[Nothing] = ActorSystem(Behaviors.empty, "discord-visual-room")
     implicit val ec: ExecutionContextExecutor = system.executionContext
 
-    // Create RoomActor with LLM config
-    val roomActor = system.systemActorOf(
-      RoomActor(config.llm),
-      "room-actor"
+    // Create GuildManager with LLM config (manages all rooms for the guild)
+    val guildManager = system.systemActorOf(
+      GuildManager(config.llm),
+      "guild-manager"
     )
 
-    // Initialize room
-    initializeRoom(config, roomActor)
-
     // Start WebSocket server
-    startWebSocketServer(config, roomActor)
+    startWebSocketServer(config, guildManager)
 
     // Start Discord bot
-    startDiscordBot(config, roomActor)
+    startDiscordBot(config, guildManager)
 
     // Add shutdown hook
     addShutdownHook(system)
@@ -72,11 +68,6 @@ object Main extends LazyLogging {
       throw new IllegalArgumentException("DISCORD_TOKEN environment variable is required")
     )
 
-    val voiceChannelId = sys.env.getOrElse(
-      "VOICE_CHANNEL_ID",
-      throw new IllegalArgumentException("VOICE_CHANNEL_ID environment variable is required")
-    )
-
     val guildId = sys.env.getOrElse(
       "GUILD_ID",
       throw new IllegalArgumentException("GUILD_ID environment variable is required")
@@ -90,16 +81,9 @@ object Main extends LazyLogging {
     val wsPort = sys.env.getOrElse("WS_PORT", "8080").toInt
     val wsPath = sys.env.getOrElse("WS_PATH", "/ws")
 
-    val roomName = sys.env.getOrElse("ROOM_NAME", "Visual Room")
-    val roomWidth = sys.env.getOrElse("ROOM_WIDTH", "20").toDouble
-    val roomHeight = sys.env.getOrElse("ROOM_HEIGHT", "4").toDouble
-    val roomDepth = sys.env.getOrElse("ROOM_DEPTH", "20").toDouble
-    val roomMaxUsers = sys.env.getOrElse("ROOM_MAX_USERS", "20").toInt
-
     AppConfig(
       discord = DiscordConfig(
         token = discordToken,
-        voiceChannelId = voiceChannelId,
         guildId = guildId
       ),
       llm = LLMConfig(
@@ -111,38 +95,8 @@ object Main extends LazyLogging {
         host = wsHost,
         port = wsPort,
         path = wsPath
-      ),
-      room = RoomConfig(
-        id = voiceChannelId,
-        name = roomName,
-        dimensions = RoomDimensions(roomWidth, roomHeight, roomDepth),
-        maxUsers = roomMaxUsers
       )
     )
-  }
-
-  /**
-   * Initialize room with configuration
-   */
-  private def initializeRoom(
-    config: AppConfig,
-    roomActor: akka.actor.typed.ActorRef[RoomActor.Command]
-  )(implicit system: ActorSystem[Nothing], ec: ExecutionContextExecutor): Unit = {
-    import akka.actor.typed.scaladsl.AskPattern._
-    implicit val timeout: akka.util.Timeout = 5.seconds
-
-    logger.info(s"Initializing room: ${config.room.name}")
-
-    val initFuture = roomActor.ask(replyTo => RoomActor.Initialize(config.room, replyTo))
-
-    initFuture.onComplete {
-      case Success(RoomActor.InitializationResponse(true, message)) =>
-        logger.info(s"Room initialized: $message")
-      case Success(RoomActor.InitializationResponse(false, message)) =>
-        logger.error(s"Failed to initialize room: $message")
-      case Failure(ex) =>
-        logger.error("Failed to initialize room", ex)
-    }
   }
 
   /**
@@ -150,7 +104,7 @@ object Main extends LazyLogging {
    */
   private def startWebSocketServer(
     config: AppConfig,
-    roomActor: akka.actor.typed.ActorRef[RoomActor.Command]
+    guildManager: akka.actor.typed.ActorRef[GuildManager.Command]
   )(implicit system: ActorSystem[Nothing], ec: ExecutionContextExecutor): Unit = {
 
     logger.info(s"Starting WebSocket server on ${config.websocket.host}:${config.websocket.port}")
@@ -158,7 +112,7 @@ object Main extends LazyLogging {
     val bindingFuture = SceneGraphServer.start(
       host = config.websocket.host,
       port = config.websocket.port,
-      roomActor = roomActor
+      guildManager = guildManager
     )
 
     bindingFuture.onComplete {
@@ -177,16 +131,15 @@ object Main extends LazyLogging {
    */
   private def startDiscordBot(
     config: AppConfig,
-    roomActor: akka.actor.typed.ActorRef[RoomActor.Command]
+    guildManager: akka.actor.typed.ActorRef[GuildManager.Command]
   )(implicit ec: ExecutionContextExecutor): Unit = {
 
     logger.info("Starting Discord bot...")
 
     val botFuture = DiscordBot.start(
       token = config.discord.token,
-      voiceChannelId = config.discord.voiceChannelId,
       guildId = config.discord.guildId,
-      roomActor = roomActor
+      guildManager = guildManager
     )
 
     botFuture.onComplete {

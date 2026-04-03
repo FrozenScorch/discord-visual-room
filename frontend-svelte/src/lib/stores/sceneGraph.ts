@@ -1,30 +1,31 @@
 import { writable } from 'svelte/store';
-import type { SceneGraph } from '../types';
+import type { GuildSceneGraph, RoomData } from '../types';
 
-const defaultScene: SceneGraph = {
-  version: '0',
+const defaultGuild: GuildSceneGraph = {
+  version: '2.0.0',
   timestamp: 0,
-  users: [],
-  furniture: [],
-  room: {
+  guild: {
     id: 'default',
     name: 'Discord Visual Room',
-    dimensions: {
-      width: 20,
-      height: 4,
-      depth: 20
-    },
-    maxUsers: 20
-  }
+    roles: [],
+    onlineMemberCount: 0,
+  },
+  rooms: [],
+  roomsMeta: [],
 };
 
 function createSceneGraphStore() {
-  const { subscribe, set, update } = writable<SceneGraph>(defaultScene);
+  const { subscribe, set, update } = writable<GuildSceneGraph>(defaultGuild);
   return {
     subscribe,
     set,
-    update
+    update,
   };
 }
 
 export const sceneGraph = createSceneGraphStore();
+
+/** Helper: get a specific room by id from the current store value */
+export function getRoomById(rooms: RoomData[], roomId: string): RoomData | undefined {
+  return rooms.find((r) => r.id === roomId);
+}

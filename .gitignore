@@ -1,3 +1,11 @@
 node_modules
 dist/
 tmpclaude-*
+.env
+
+# Scala / sbt
+target/
+project/target/
+*.class
+*.cache
+logs/

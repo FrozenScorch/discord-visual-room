@@ -240,19 +240,78 @@ case class ValidationResult(
 // Actor messages are defined in their respective actor companion objects
 // (RoomActor, UserManager, FurnitureManager) in the actors package.
 
+// ── Guild-level types ──────────────────────────────────────────────
+
+sealed trait ChannelType { def typeName: String }
+object ChannelType {
+  case object Voice extends ChannelType { val typeName = "VOICE" }
+  case object Text extends ChannelType { val typeName = "TEXT" }
+}
+
+case class GuildInfo(
+  id: String,
+  name: String,
+  icon: Option[String] = None,
+  roles: Seq[GuildRole] = Seq.empty,
+  onlineMemberCount: Int = 0
+)
+
+case class GuildRole(
+  id: String,
+  name: String,
+  color: Int,
+  position: Int
+)
+
+case class RoomPosition(x: Double, z: Double)
+
+case class RoomMeta(
+  id: String,
+  name: String,
+  channelType: ChannelType,
+  position: Option[RoomPosition] = None,
+  userCount: Int = 0
+)
+
+case class RoomData(
+  id: String,
+  name: String,
+  channelType: ChannelType,
+  position: RoomPosition,
+  users: Seq[UserNode] = Seq.empty,
+  furniture: Seq[FurnitureNode] = Seq.empty
+)
+
+case class GuildSceneGraph(
+  version: String,
+  timestamp: Long,
+  guild: GuildInfo,
+  rooms: Seq[RoomData] = Seq.empty,
+  roomsMeta: Seq[RoomMeta] = Seq.empty
+)
+
+object GuildSceneGraph {
+  val currentVersion: String = "2.0.0"
+  def create(
+    guild: GuildInfo,
+    rooms: Seq[RoomData] = Seq.empty,
+    roomsMeta: Seq[RoomMeta] = Seq.empty
+  ): GuildSceneGraph = GuildSceneGraph(
+    currentVersion, System.currentTimeMillis(), guild, rooms, roomsMeta
+  )
+}
+
 /**
  * Configuration for the application
  */
 case class AppConfig(
   discord: DiscordConfig,
   llm: LLMConfig,
-  websocket: WebSocketConfig,
-  room: RoomConfig
+  websocket: WebSocketConfig
 )
 
 case class DiscordConfig(
   token: String,
-  voiceChannelId: String,
   guildId: String
 )
 

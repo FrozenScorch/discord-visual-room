@@ -12,7 +12,7 @@
 
 import { connection } from './stores/connection';
 import { sceneGraph } from './stores/sceneGraph';
-import type { SceneUpdateMessage, ConnectionState, WSMessage } from './types';
+import type { SceneUpdateMessage, ConnectionState, WSMessage, GuildSceneGraph } from './types';
 
 let ws: WebSocket | null = null;
 let wsUrl: string = 'ws://localhost:8080/ws';
@@ -138,6 +138,18 @@ function handleMessage(event: MessageEvent): void {
     }
 
     // Handle raw SceneGraph (no wrapper) as fallback
+    // v2: guild field present
+    if (parsed.version && parsed.guild !== undefined) {
+      const message: SceneUpdateMessage = {
+        type: 'SCENE_UPDATE',
+        timestamp: parsed.timestamp || Date.now(),
+        payload: parsed,
+      };
+      handleSceneUpdate(message);
+      return;
+    }
+
+    // v1: users + furniture (legacy)
     if (parsed.version && parsed.users !== undefined && parsed.furniture !== undefined) {
       const message: SceneUpdateMessage = {
         type: 'SCENE_UPDATE',
@@ -155,7 +167,16 @@ function handleMessage(event: MessageEvent): void {
 }
 
 function handleSceneUpdate(message: SceneUpdateMessage): void {
-  sceneGraph.set(message.payload);
+  const payload = message.payload;
+
+  // Detect v2 guild payload by checking for guild field
+  if (payload && 'guild' in payload && 'rooms' in payload) {
+    sceneGraph.set(payload as GuildSceneGraph);
+    return;
+  }
+
+  // v1 single-room payload — not supported in guild mode, log warning
+  console.warn('[WS] Received v1 SceneGraph but guild mode expected. Ignoring.');
 }
 
 function handleError(_event: Event): void {
