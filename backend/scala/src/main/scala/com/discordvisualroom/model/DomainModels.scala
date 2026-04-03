@@ -312,7 +312,7 @@ case class AppConfig(
 
 case class DiscordConfig(
   token: String,
-  guildId: String
+  guildId: Option[String] = None
 )
 
 case class LLMConfig(

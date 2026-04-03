@@ -12,6 +12,7 @@ import discord4j.core.event.domain.VoiceStateUpdateEvent
 import discord4j.core.event.domain.lifecycle.ReadyEvent
 import discord4j.core.event.domain.PresenceUpdateEvent
 
+import java.util.concurrent.atomic.AtomicReference
 import scala.collection.immutable
 import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.jdk.CollectionConverters._
@@ -22,15 +23,56 @@ import scala.util.Try
  * Discord bot integration using discord4j
  * Listens to voice channel events and tracks user activities
  * Auto-discovers all channels from the guild and routes events to GuildManager
+ *
+ * Supports runtime guild selection: bot starts without a guild, frontend selects one via /api/guilds
  */
 object DiscordBot extends LazyLogging {
 
+  /** Shared gateway client reference for REST queries (guild listing) */
+  private val gatewayRef: AtomicReference[discord4j.core.GatewayDiscordClient] =
+    new AtomicReference[discord4j.core.GatewayDiscordClient]()
+
+  /** Currently active guild ID (set at startup or via SelectGuild) */
+  private val activeGuildId: AtomicReference[String] = new AtomicReference[String]()
+
+  /** Get the gateway client (for REST queries) */
+  def getGatewayClient: Option[discord4j.core.GatewayDiscordClient] =
+    Option(gatewayRef.get())
+
+  /** Get the currently active guild ID */
+  def getActiveGuildId: Option[String] = Option(activeGuildId.get())
+
+  /**
+   * List all guilds the bot is a member of
+   * Returns Seq[(id, name, iconUrl, memberCount)]
+   */
+  def listAvailableGuilds(): immutable.Seq[(String, String, Option[String], Int)] = {
+    val gateway = gatewayRef.get()
+    if (gateway == null) return Seq.empty
+
+    Try {
+      val guilds = gateway.getGuilds.collectList().block()
+      if (guilds == null) return Seq.empty
+
+      guilds.asScala.toSeq.map { g =>
+        val icon = Option(g.getIconUrl(discord4j.rest.util.Image.Format.PNG)).flatMap(_.toScala)
+        val memberCount = g.getMembers.count().block().intValue()
+        (g.getId.asString(), g.getName, icon, memberCount)
+      }.sortBy(_._2) // sort by name
+    }.getOrElse {
+      logger.error("Failed to list guilds")
+      Seq.empty
+    }
+  }
+
   /**
    * Create and start the Discord bot
+   * If guildId is provided, immediately discovers that guild
+   * If not, waits for frontend to select via SelectGuild
    */
   def start(
     token: String,
-    guildId: String,
+    guildId: Option[String],
     guildManager: ActorRef[GuildManager.Command]
   )(implicit ec: ExecutionContext): Future[Unit] = {
 
@@ -47,30 +89,40 @@ object DiscordBot extends LazyLogging {
         return promise.future
       }
 
+      gatewayRef.set(gateway)
       logger.info("Discord bot connected successfully")
 
       val eventDispatcher = gateway.getEventDispatcher
 
-      // Handle ready event - discover guild and all channels
+      // Handle ready event
       eventDispatcher.on(classOf[ReadyEvent]).subscribe { event =>
         val self = event.getSelf
         logger.info(s"Bot logged in as: ${self.getUsername}#${self.getDiscriminator}")
-        discoverGuild(gateway, guildId, guildManager)
         promise.trySuccess(())
+
+        // Auto-discover guild if GUILD_ID was provided
+        guildId.foreach { gid =>
+          activeGuildId.set(gid)
+          discoverGuild(gateway, gid, guildManager)
+        }
       }
 
-      // Handle voice state updates (users joining/leaving ANY voice channel)
+      // Handle voice state updates (filter by active guild)
       eventDispatcher.on(classOf[VoiceStateUpdateEvent]).subscribe { event =>
-        handleVoiceStateUpdate(event, guildId, guildManager)
+        val currentGuild = activeGuildId.get()
+        if (currentGuild != null) handleVoiceStateUpdate(event, currentGuild, guildManager)
       }
 
-      // Handle presence updates (activity changes)
+      // Handle presence updates (filter by active guild)
       eventDispatcher.on(classOf[PresenceUpdateEvent]).subscribe { event =>
-        handlePresenceUpdate(event, guildId, guildManager)
+        val currentGuild = activeGuildId.get()
+        if (currentGuild != null) handlePresenceUpdate(event, currentGuild, guildManager)
       }
 
-      // Initial sync of all voice states across the guild
-      syncInitialVoiceState(gateway, guildId, guildManager)
+      // Initial sync if GUILD_ID was provided
+      guildId.foreach { gid =>
+        syncInitialVoiceState(gateway, gid, guildManager)
+      }
 
       // Ensure promise completes even if ReadyEvent was already fired
       Future {
@@ -84,6 +136,22 @@ object DiscordBot extends LazyLogging {
         logger.error("Failed to start Discord bot", ex)
         promise.tryFailure(ex)
         promise.future
+    }
+  }
+
+  /**
+   * Select a guild to visualize (called from REST endpoint)
+   */
+  def selectGuild(guildId: String, guildManager: ActorRef[GuildManager.Command])(implicit ec: ExecutionContext): Future[Unit] = {
+    val gateway = gatewayRef.get()
+    if (gateway == null) {
+      Future.failed(new RuntimeException("Discord bot not connected"))
+    } else {
+      activeGuildId.set(guildId)
+      logger.info(s"Switching to guild: $guildId")
+      discoverGuild(gateway, guildId, guildManager)
+      syncInitialVoiceState(gateway, guildId, guildManager)
+      Future.successful(())
     }
   }
 

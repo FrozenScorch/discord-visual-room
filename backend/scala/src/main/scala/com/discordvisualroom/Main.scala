@@ -47,6 +47,11 @@ object Main extends LazyLogging {
 
     logger.info("=" * 60)
     logger.info("Discord Visual Room Backend Started Successfully")
+    if (config.discord.guildId.isDefined) {
+      logger.info(s"Visualizing guild: ${config.discord.guildId.get}")
+    } else {
+      logger.info("No GUILD_ID set — guild selection available at /api/guilds")
+    }
     logger.info("Press ENTER to stop...")
     logger.info("=" * 60)
 
@@ -68,10 +73,7 @@ object Main extends LazyLogging {
       throw new IllegalArgumentException("DISCORD_TOKEN environment variable is required")
     )
 
-    val guildId = sys.env.getOrElse(
-      "GUILD_ID",
-      throw new IllegalArgumentException("GUILD_ID environment variable is required")
-    )
+    val guildId = sys.env.get("GUILD_ID")
 
     val llmBaseUrl = sys.env.getOrElse("LLM_BASE_URL", "http://192.168.68.62:1234")
     val llmTimeout = sys.env.getOrElse("LLM_TIMEOUT_MS", "5000").toInt

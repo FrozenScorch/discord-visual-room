@@ -4,11 +4,14 @@
   import { connection } from '$lib/stores/connection';
   import { connect, disconnect } from '$lib/wsClient';
   import GuildScene from '$lib/components/GuildScene.svelte';
+  import GuildSelector from '$lib/components/GuildSelector.svelte';
   import TopBar from '$lib/components/TopBar.svelte';
   import ConnectionStatus from '$lib/components/ConnectionStatus.svelte';
   import type { GuildSceneGraph, ViewMode, CameraTarget } from '$lib/types';
 
+  let apiUrl = 'http://localhost:8080';
   let wsUrl = 'ws://localhost:8080/ws';
+  let guildSelected = $state(false);
   let currentScene: GuildSceneGraph = $state({
     version: '2.0.0',
     timestamp: 0,
@@ -24,6 +27,10 @@
   // Subscribe to stores
   const unsubscribeScene = sceneGraph.subscribe((value) => {
     currentScene = value;
+    // Once we get a real scene with rooms, mark as selected
+    if (value.guild.id !== 'default') {
+      guildSelected = true;
+    }
   });
   const unsubscribeConnection = connection.subscribe((value) => {
     connectionState = value;
@@ -34,6 +41,12 @@
     }
   });
 
+  function handleGuildSelect(guild: { id: string; name: string }) {
+    guildSelected = true;
+    // Connect WebSocket to receive scene updates
+    connect(wsUrl);
+  }
+
   function handleBackToOverview() {
     viewMode = 'overview';
     focusedRoom = null;
@@ -41,7 +54,8 @@
   }
 
   onMount(() => {
-    connect(wsUrl);
+    // Don't connect WebSocket until guild is selected
+    // (backend needs to know which guild to visualize)
   });
 
   onDestroy(() => {
@@ -51,19 +65,25 @@
   });
 </script>
 
-<GuildScene
-  bind:viewMode
-  bind:focusedRoom
-  sceneData={currentScene}
-/>
+{#if !guildSelected}
+  <!-- Guild selection overlay -->
+  <GuildSelector {apiUrl} onSelect={handleGuildSelect} />
+{:else}
+  <!-- 3D visualization -->
+  <GuildScene
+    bind:viewMode
+    bind:focusedRoom
+    sceneData={currentScene}
+  />
 
-<TopBar
-  guildName={currentScene.guild.name}
-  onlineCount={currentScene.guild.onlineMemberCount || currentScene.rooms.reduce((s, r) => s + r.users.length, 0)}
-  {viewMode}
-  {focusedRoom}
-  onBack={handleBackToOverview}
-  faded={topBarFaded}
-/>
+  <TopBar
+    guildName={currentScene.guild.name}
+    onlineCount={currentScene.guild.onlineMemberCount || currentScene.rooms.reduce((s, r) => s + r.users.length, 0)}
+    {viewMode}
+    {focusedRoom}
+    onBack={handleBackToOverview}
+    faded={topBarFaded}
+  />
 
-<ConnectionStatus state={connectionState} />
+  <ConnectionStatus state={connectionState} />
+{/if}

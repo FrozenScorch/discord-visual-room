@@ -14,6 +14,7 @@ import akka.stream.scaladsl.{Flow, Sink, Source}
 import akka.stream.OverflowStrategy
 import akka.util.Timeout
 import com.discordvisualroom.actors.GuildManager
+import com.discordvisualroom.discord.DiscordBot
 import com.discordvisualroom.model._
 import com.discordvisualroom.serialization.JsonSerializers
 import com.typesafe.scalalogging.LazyLogging
@@ -47,14 +48,16 @@ object SceneGraphServer extends LazyLogging {
   /**
    * Create HTTP route with WebSocket endpoint and CORS
    */
-  private def createRoute(guildManager: ActorRef[GuildManager.Command])(implicit system: ActorSystem[Nothing]): Route = {
+  private def createRoute(guildManager: ActorRef[GuildManager.Command])(implicit system: ActorSystem[Nothing], ec: ExecutionContext): Route = {
     // CORS headers for frontend
     respondWithHeaders(
       akka.http.scaladsl.model.headers.`Access-Control-Allow-Origin`.*,
       akka.http.scaladsl.model.headers.`Access-Control-Allow-Methods`(
         akka.http.scaladsl.model.HttpMethods.GET,
+        akka.http.scaladsl.model.HttpMethods.POST,
         akka.http.scaladsl.model.HttpMethods.OPTIONS
-      )
+      ),
+      akka.http.scaladsl.model.headers.`Access-Control-Allow-Headers`("Content-Type")
     ) {
       path("ws") {
         get {
@@ -75,7 +78,53 @@ object SceneGraphServer extends LazyLogging {
             complete(StatusCodes.OK, json)
           }
         }
+      } ~
+      path("api" / "guilds") {
+        get {
+          val guilds = DiscordBot.listAvailableGuilds()
+          val json = serializeGuildsList(guilds)
+          complete(StatusCodes.OK, json)
+        }
+      } ~
+      path("api" / "guilds" / "select") {
+        post {
+          entity(as[String]) { body =>
+            val guildId = parseGuildId(body)
+            if (guildId.isEmpty) {
+              complete(StatusCodes.BadRequest, """{"error":"missing guildId"}""")
+            } else {
+              onSuccess(DiscordBot.selectGuild(guildId, guildManager)) {
+                complete(StatusCodes.OK, """{"status":"ok"}""")
+              }
+            }
+          }
+        }
       }
+    }
+  }
+
+  /**
+   * Serialize guild list for /api/guilds response
+   */
+  private def serializeGuildsList(guilds: Seq[(String, String, Option[String], Int)]): String = {
+    val items = guilds.map { case (id, name, icon, memberCount) =>
+      s"""{"id":"$id","name":"${name.replace("\"", "\\\"")}","icon":${icon.map(u => s""""$u""""").getOrElse("null")},"memberCount":$memberCount}"""
+    }
+    s"""{"guilds":[${items.mkString(",")}]}"""
+  }
+
+  /**
+   * Parse guildId from request body (JSON or plain text)
+   */
+  private def parseGuildId(body: String): String = {
+    import org.json4s._
+    import org.json4s.jackson.JsonMethods._
+    implicit val formats: Formats = DefaultFormats
+    try {
+      val parsed = parse(body)
+      (parsed \ "guildId").extractOpt[String].getOrElse("")
+    } catch {
+      case _: Exception => body.trim
     }
   }
 
