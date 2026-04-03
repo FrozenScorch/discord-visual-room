@@ -173,23 +173,23 @@ class LLMHealthCheck(llmUrl: String, timeoutMs: Long = 5000) extends HealthCheck
   override val name: String = "llm"
 
   override def check()(implicit ec: ExecutionContext): Future[HealthCheckResult] = {
-    import sttp.client3._
+    import java.net.http.{HttpClient, HttpRequest, HttpResponse}
+    import java.net.URI
+    import java.time.Duration
 
     val startTime = System.currentTimeMillis()
 
-    // Simple health check - try to reach the LLM endpoint
-    // In production, you might want to call a specific health endpoint
-    val backend = HttpURLConnectionBackend()
-    val request = basicRequest
-      .get(uri"$llmUrl/health")
-      .timeout(timeoutMs)
-      .response(HttpStatus)
-
     try {
-      val response = request.send(backend)
+      val client = HttpClient.newHttpClient()
+      val request = HttpRequest.newBuilder()
+        .uri(URI.create(s"$llmUrl/health"))
+        .timeout(Duration.ofMillis(timeoutMs))
+        .GET()
+        .build()
+      val response = client.send(request, HttpResponse.BodyHandlers.ofString())
       val duration = System.currentTimeMillis() - startTime
 
-      response.code match {
+      response.statusCode() match {
         case 200 =>
           Future.successful(HealthCheckResult(
             isHealthy = true,
@@ -199,12 +199,12 @@ class LLMHealthCheck(llmUrl: String, timeoutMs: Long = 5000) extends HealthCheck
               "url" -> llmUrl
             )
           ))
-        case _ =>
+        case code =>
           Future.successful(HealthCheckResult(
             isHealthy = false,
             status = HealthStatus.Unhealthy,
-            details = Map("statusCode" -> response.code.toString),
-            error = Some(s"LLM service returned status ${response.code}")
+            details = Map("statusCode" -> code.toString),
+            error = Some(s"LLM service returned status $code")
           ))
       }
     } catch {
@@ -303,18 +303,19 @@ class MemoryHealthCheck(thresholdPercent: Double = 85.0) extends HealthCheck {
       val usagePercent = (usedMemory.toDouble / maxMemory.toDouble) * 100
 
       val (status, error) = if (usagePercent > thresholdPercent) {
-        (HealthStatus.Degraded, Some(s"Memory usage is ${usagePercent.toFixed(2)}%"))
+        (HealthStatus.Degraded, Some(s"Memory usage is ${f"$usagePercent%.2f"}%"))
       } else {
         (HealthStatus.Healthy, None)
       }
 
+      val healthStatus: HealthStatus = status
       HealthCheckResult(
-        isHealthy = status != HealthStatus.Unhealthy,
-        status = status,
+        isHealthy = healthStatus != HealthStatus.Unhealthy,
+        status = healthStatus,
         details = Map(
           "usedMemory" -> (usedMemory / 1024 / 1024).toString,
           "maxMemory" -> (maxMemory / 1024 / 1024).toString,
-          "usagePercent" -> usagePercent.toFixed(2)
+          "usagePercent" -> f"$usagePercent%.2f"
         ),
         error = error
       )

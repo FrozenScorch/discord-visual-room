@@ -200,7 +200,7 @@ class Histogram(private val maxSize: Int = 1000) {
 
   def getStats(): HistogramStats = synchronized {
     if (values.isEmpty) {
-      HistogramStats(0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+      HistogramStats(0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     } else {
       val sorted = values.toArray().map(_.asInstanceOf[Double]).sorted
       val size = sorted.length

@@ -2,6 +2,7 @@ package com.discordvisualroom.logging
 
 import org.slf4j.MDC
 
+import scala.jdk.CollectionConverters._
 import scala.util.{Using, Try}
 
 /**
@@ -129,7 +130,10 @@ object MdcContext {
       setCorrelationId(correlationId)
       fn
     } finally {
-      previous.foreach(setCorrelationId).getOrElse(remove(CorrelationIdKey))
+      previous match {
+        case Some(prev) => setCorrelationId(prev)
+        case None => remove(CorrelationIdKey)
+      }
     }
   }
 
@@ -142,7 +146,10 @@ object MdcContext {
       setUserId(userId)
       fn
     } finally {
-      previous.foreach(setUserId).getOrElse(remove(UserIdKey))
+      previous match {
+        case Some(prev) => setUserId(prev)
+        case None => remove(UserIdKey)
+      }
     }
   }
 
@@ -155,7 +162,10 @@ object MdcContext {
       setComponent(component)
       fn
     } finally {
-      previous.foreach(setComponent).getOrElse(remove(ComponentKey))
+      previous match {
+        case Some(prev) => setComponent(prev)
+        case None => remove(ComponentKey)
+      }
     }
   }
 

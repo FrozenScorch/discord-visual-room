@@ -5,6 +5,7 @@ import akka.NotUsed
 import akka.actor.typed.{ActorRef, ActorSystem}
 import akka.actor.typed.scaladsl.{Behaviors, ActorContext}
 import akka.actor.typed.scaladsl.AskPattern._
+import akka.actor.typed.scaladsl.adapter._
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage}
 import akka.http.scaladsl.model.StatusCodes
@@ -90,7 +91,7 @@ object SceneGraphServer extends LazyLogging {
   )(implicit system: ActorSystem[Nothing]): Flow[Message, Message, Any] = {
 
     // Create an actor-backed source that will push messages to the WebSocket
-    val (outActor, outSource) = Source
+    val (outActorUntyped, outSource) = Source
       .actorRef[RoomActor.SceneGraphUpdate](
         completionMatcher = PartialFunction.empty,
         failureMatcher = PartialFunction.empty,
@@ -98,6 +99,9 @@ object SceneGraphServer extends LazyLogging {
         overflowStrategy = OverflowStrategy.dropHead
       )
       .preMaterialize()
+
+    // Convert untyped ActorRef to typed ActorRef[SceneGraphUpdate]
+    val outActor: ActorRef[RoomActor.SceneGraphUpdate] = outActorUntyped.toTyped
 
     // Subscribe this client's output actor to room updates
     roomActor ! RoomActor.SubscribeToSceneUpdates(outActor)
