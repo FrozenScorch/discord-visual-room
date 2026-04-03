@@ -1,0 +1,225 @@
+/**
+ * Discord Visual Room - Dark Ambient Theme
+ *
+ * Ported from ../frontend/styles.css for SvelteKit.
+ * This is the global CSS applied via +layout.svelte.
+ */
+
+/* ─── Reset & Base ──────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #161625;
+  color: #e0e0f0;
+  font-family: 'Segoe UI', 'SF Pro', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#svelte {
+  width: 100%;
+  height: 100%;
+}
+
+/* ─── Canvas / Scene Container ──────────────────────────────────────────── */
+
+main,
+.scene-container {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ─── Top Bar ───────────────────────────────────────────────────────────── */
+
+.top-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: rgba(22, 22, 37, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(88, 101, 242, 0.15);
+  transition: opacity 1.5s ease;
+  pointer-events: auto;
+}
+
+.top-bar.faded {
+  opacity: 0.3;
+}
+
+.top-bar:hover {
+  opacity: 1 !important;
+}
+
+.room-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e0e0f0;
+  letter-spacing: 0.3px;
+}
+
+/* ─── User Count Badge ──────────────────────────────────────────────────── */
+
+.user-count {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: rgba(22, 22, 37, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 20px;
+  border: 1px solid rgba(88, 101, 242, 0.2);
+}
+
+.user-count-icon {
+  font-size: 14px;
+}
+
+.user-count-number {
+  font-size: 14px;
+  font-weight: 600;
+  color: #b8b8e0;
+}
+
+/* ─── Connection Status ────────────────────────────────────────────────── */
+
+.status-dot {
+  position: fixed;
+  z-index: 100;
+}
+
+.status-dot .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #666;
+}
+
+.status-dot.connected .dot {
+  background: #43b581;
+  box-shadow: 0 0 6px rgba(67, 181, 129, 0.5);
+}
+
+.status-dot.connecting .dot {
+  background: #faa61a;
+  box-shadow: 0 0 6px rgba(250, 166, 26, 0.5);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.status-dot.error .dot {
+  background: #ed4245;
+  box-shadow: 0 0 6px rgba(237, 66, 69, 0.5);
+}
+
+/* ─── Loading Overlay ──────────────────────────────────────────────────── */
+
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #161625;
+  transition: opacity 0.6s ease;
+}
+
+.loading-overlay.loaded {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(88, 101, 242, 0.2);
+  border-top-color: #5865f2;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 16px;
+}
+
+.loading-overlay p {
+  font-size: 14px;
+  color: #8888b0;
+  font-weight: 500;
+}
+
+/* ─── Animations ────────────────────────────────────────────────────────── */
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+/* ─── Scene Loaded ─────────────────────────────────────────────────────── */
+
+body.scene-loaded .top-bar {
+  animation: fadeIn 0.8s ease;
+}
+
+/* ─── Scrollbar ────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(88, 101, 242, 0.3);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(88, 101, 242, 0.5);
+}
+
+/* ─── Selection ────────────────────────────────────────────────────────── */
+
+::selection {
+  background: rgba(88, 101, 242, 0.3);
+  color: #e0e0f0;
+}
