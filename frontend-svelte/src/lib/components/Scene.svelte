@@ -17,7 +17,7 @@
     <!-- Imperative scene setup (background, fog, renderer) -->
     <SceneSetup />
 
-    <!-- Camera -->
+    <!-- Camera + Orbit Controls -->
     <T.PerspectiveCamera
       position={[0, 12, 16]}
       fov={55}
@@ -28,17 +28,16 @@
       oncreate={(camera: THREE.PerspectiveCamera) => {
         camera.lookAt(0, 0, 0);
       }}
-    />
-
-    <!-- Orbit Controls -->
-    <OrbitControls
-      enableDamping
-      dampingFactor={0.05}
-      maxPolarAngle={Math.PI / 2.2}
-      minDistance={4}
-      maxDistance={35}
-      target={[0, 0.5, 0]}
-    />
+    >
+      <OrbitControls
+        enableDamping
+        dampingFactor={0.05}
+        maxPolarAngle={Math.PI / 2.2}
+        minDistance={4}
+        maxDistance={35}
+        target={[0, 0.5, 0]}
+      />
+    </T.PerspectiveCamera>
 
     <!-- Lights -->
     <T.AmbientLight intensity={0.4} color="#b8a9d4" />
