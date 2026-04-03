@@ -18,14 +18,22 @@ export type FurnitureType = "COMPUTER_DESK" | "COUCH_2_SEATER" | "COUCH_SINGLE" 
 export type ActivityType = "PLAYING" | "STREAMING" | "LISTENING" | "WATCHING" | "COMPETING";
 
 /**
- * Complete scene graph that backend sends to frontend
+ * 3D vector for positions and rotations
  */
-export interface SceneGraph {
-  version: string;
-  timestamp: number;
-  users: UserNode[];
-  furniture: FurnitureNode[];
-  room: RoomConfig;
+export interface Vector3D {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * User's Discord activity
+ */
+export interface UserActivity {
+  name: string;
+  type: ActivityType;
+  details?: string;
+  state?: string;
 }
 
 /**
@@ -55,27 +63,62 @@ export interface FurnitureNode {
   capacity: number;
 }
 
-/**
- * User's Discord activity
- */
-export interface UserActivity {
+// ─── Guild-level types (v2.0.0) ────────────────────────────────────────────
+
+export type ChannelType = "VOICE" | "TEXT";
+
+export interface GuildRole {
+  id: string;
   name: string;
-  type: ActivityType;
-  details?: string;
-  state?: string;
+  color: number;
+  position: number;
 }
 
-/**
- * 3D vector for positions and rotations
- */
-export interface Vector3D {
+export interface GuildInfo {
+  id: string;
+  name: string;
+  icon?: string;
+  roles: GuildRole[];
+  onlineMemberCount: number;
+}
+
+export interface RoomPosition {
   x: number;
-  y: number;
   z: number;
 }
 
+export interface RoomMeta {
+  id: string;
+  name: string;
+  channelType: ChannelType;
+  position?: RoomPosition;
+  userCount: number;
+}
+
+export interface RoomData {
+  id: string;
+  name: string;
+  channelType: ChannelType;
+  position: RoomPosition;
+  users: UserNode[];
+  furniture: FurnitureNode[];
+}
+
 /**
- * Room configuration
+ * Complete guild scene graph (v2.0.0) that backend sends to frontend
+ */
+export interface GuildSceneGraph {
+  version: string;
+  timestamp: number;
+  guild: GuildInfo;
+  rooms: RoomData[];
+  roomsMeta: RoomMeta[];
+}
+
+// ─── Legacy types (kept for backward compatibility) ─────────────────────────
+
+/**
+ * Room configuration (legacy v1, used only as fallback)
  */
 export interface RoomConfig {
   id: string;
@@ -89,8 +132,18 @@ export interface RoomConfig {
 }
 
 /**
- * WebSocket message types
+ * Legacy single-room scene graph (v1.0.0)
  */
+export interface SceneGraph {
+  version: string;
+  timestamp: number;
+  users: UserNode[];
+  furniture: FurnitureNode[];
+  room: RoomConfig;
+}
+
+// ─── WebSocket message types ────────────────────────────────────────────────
+
 export type WSMessageType =
   | "SCENE_UPDATE"
   | "USER_JOINED"
@@ -107,39 +160,7 @@ export interface WSMessage {
 
 export interface SceneUpdateMessage extends WSMessage {
   type: "SCENE_UPDATE";
-  payload: SceneGraph;
-}
-
-/**
- * LLM request/response types
- */
-export interface LLMLayoutRequest {
-  users: Array<{
-    id: string;
-    username: string;
-    activity?: UserActivity;
-  }>;
-  roomCapacity: number;
-  availableFurniture: FurnitureType[];
-}
-
-export interface LLMLayoutResponse {
-  assignments: Array<{
-    userId: string;
-    furniture: FurnitureType;
-  }>;
-}
-
-/**
- * Validation result for LLM responses
- */
-export interface ValidationResult {
-  valid: boolean;
-  errors: string[];
-  sanitizedAssignments?: Array<{
-    userId: string;
-    furniture: FurnitureType;
-  }>;
+  payload: GuildSceneGraph | SceneGraph;
 }
 
 // ─── Frontend-only types ────────────────────────────────────────────────────
@@ -150,9 +171,15 @@ export interface ValidationResult {
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 /**
- * Configuration for the renderer / WebSocket connection
+ * Camera view mode for guild scene
  */
-export interface RendererConfig {
-  wsUrl: string;
+export type ViewMode = 'overview' | 'room';
+
+/**
+ * Camera focus target for room navigation
+ */
+export interface CameraTarget {
+  roomId: string;
+  position: RoomPosition;
   roomName: string;
 }

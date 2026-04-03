@@ -1,30 +1,24 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import type { Snippet } from 'svelte';
   import { sceneGraph } from '$lib/stores/sceneGraph';
   import { connection } from '$lib/stores/connection';
   import { connect, disconnect } from '$lib/wsClient';
-  import Scene from '$lib/components/Scene.svelte';
-  import FurnitureGroup from '$lib/components/FurnitureGroup.svelte';
-  import UserGroup from '$lib/components/UserGroup.svelte';
+  import GuildScene from '$lib/components/GuildScene.svelte';
   import TopBar from '$lib/components/TopBar.svelte';
   import ConnectionStatus from '$lib/components/ConnectionStatus.svelte';
-  import type { SceneGraph } from '$lib/types';
+  import type { GuildSceneGraph, ViewMode, CameraTarget } from '$lib/types';
 
   let wsUrl = 'ws://localhost:8080/ws';
-  let currentScene: SceneGraph = $state({
-    version: '0',
+  let currentScene: GuildSceneGraph = $state({
+    version: '2.0.0',
     timestamp: 0,
-    users: [],
-    furniture: [],
-    room: {
-      id: 'default',
-      name: 'Discord Visual Room',
-      dimensions: { width: 20, height: 4, depth: 20 },
-      maxUsers: 20,
-    },
+    guild: { id: 'default', name: 'Discord Visual Room', roles: [], onlineMemberCount: 0 },
+    rooms: [],
+    roomsMeta: [],
   });
   let connectionState: 'disconnected' | 'connecting' | 'connected' | 'error' = $state('disconnected');
+  let viewMode: ViewMode = $state('overview');
+  let focusedRoom: CameraTarget | null = $state(null);
   let topBarFaded = $state(false);
 
   // Subscribe to stores
@@ -40,6 +34,12 @@
     }
   });
 
+  function handleBackToOverview() {
+    viewMode = 'overview';
+    focusedRoom = null;
+    topBarFaded = false;
+  }
+
   onMount(() => {
     connect(wsUrl);
   });
@@ -51,13 +51,19 @@
   });
 </script>
 
-<Scene sceneData={currentScene}>
-  {#snippet children()}
-    <FurnitureGroup furniture={currentScene.furniture} />
-    <UserGroup users={currentScene.users} />
-  {/snippet}
-</Scene>
+<GuildScene
+  bind:viewMode
+  bind:focusedRoom
+  sceneData={currentScene}
+/>
 
-<TopBar roomName={currentScene.room.name} userCount={currentScene.users.length} faded={topBarFaded} />
+<TopBar
+  guildName={currentScene.guild.name}
+  onlineCount={currentScene.guild.onlineMemberCount || currentScene.rooms.reduce((s, r) => s + r.users.length, 0)}
+  {viewMode}
+  {focusedRoom}
+  onBack={handleBackToOverview}
+  faded={topBarFaded}
+/>
 
 <ConnectionStatus state={connectionState} />
