@@ -65,6 +65,7 @@ fork := true
 // Assembly settings for fat JAR
 assembly / assemblyMergeStrategy := {
   case PathList("META-INF", "io.netty.versions.properties") => MergeStrategy.first
+  case PathList("META-INF", "services", xs @ _*) => MergeStrategy.concat
   case PathList("META-INF", xs @ _*) => MergeStrategy.discard
   case "reference.conf" => MergeStrategy.concat
   case x => MergeStrategy.first
