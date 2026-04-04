@@ -35,7 +35,6 @@
 
     group.add(mesh);
     group.scale.setScalar(0.001); // Start at 0 for spawn animation
-    // @ts-expect-error @types/three version mismatch with threlte
     scene.add(group);
   });
 
@@ -70,7 +69,6 @@
   onDestroy(() => {
     disposed = true;
     if (group) {
-      // @ts-expect-error @types/three version mismatch with threlte
       scene.remove(group);
       group.traverse((child) => {
         if (child instanceof THREE.Mesh) {

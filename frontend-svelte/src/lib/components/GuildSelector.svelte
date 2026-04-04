@@ -9,7 +9,7 @@
   }
 
   let {
-    apiUrl = 'http://localhost:8080',
+    apiUrl = 'http://localhost:9000',
     onSelect,
   }: {
     apiUrl?: string;

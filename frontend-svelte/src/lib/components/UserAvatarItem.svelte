@@ -60,7 +60,6 @@
     // ── Identification data ──────────────────────────────────────────────
     group.userData = { type: 'user', userId: node.id };
 
-    // @ts-expect-error @types/three version mismatch with threlte
     scene.add(group);
   });
 
@@ -227,7 +226,6 @@
   onDestroy(() => {
     disposed = true;
     if (group) {
-      // @ts-expect-error @types/three version mismatch with threlte
       scene.remove(group);
       group.traverse((child) => {
         if (child instanceof THREE.Mesh || child instanceof THREE.Sprite) {

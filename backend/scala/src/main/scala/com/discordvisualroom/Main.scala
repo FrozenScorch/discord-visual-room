@@ -11,6 +11,7 @@ import com.typesafe.scalalogging.LazyLogging
 import scala.concurrent.ExecutionContextExecutor
 import scala.io.StdIn
 import scala.util.{Failure, Success}
+import java.nio.file.{Files, Paths}
 
 /**
  * Main entry point for Discord Visual Room backend
@@ -19,6 +20,9 @@ import scala.util.{Failure, Success}
 object Main extends LazyLogging {
 
   def main(args: Array[String]): Unit = {
+    // Load .env from project root before reading any configuration
+    loadDotEnv()
+
     logger.info("=" * 60)
     logger.info("Discord Visual Room Backend Starting...")
     logger.info("=" * 60)
@@ -68,20 +72,25 @@ object Main extends LazyLogging {
   private def loadConfiguration(): AppConfig = {
     logger.info("Loading configuration...")
 
-    val discordToken = sys.env.getOrElse(
-      "DISCORD_TOKEN",
-      throw new IllegalArgumentException("DISCORD_TOKEN environment variable is required")
+    def envOrProp(key: String): Option[String] =
+      Option(System.getProperty(key)).orElse(sys.env.get(key))
+
+    def envOrPropOrElse(key: String, default: String): String =
+      envOrProp(key).getOrElse(default)
+
+    val discordToken = envOrProp("DISCORD_BOT_TOKEN").getOrElse(
+      throw new IllegalArgumentException("DISCORD_BOT_TOKEN environment variable is required")
     )
 
-    val guildId = sys.env.get("GUILD_ID")
+    val guildId = envOrProp("GUILD_ID")
 
-    val llmBaseUrl = sys.env.getOrElse("LLM_BASE_URL", "http://192.168.68.62:1234")
-    val llmTimeout = sys.env.getOrElse("LLM_TIMEOUT_MS", "5000").toInt
-    val llmMaxRetries = sys.env.getOrElse("LLM_MAX_RETRIES", "2").toInt
+    val llmBaseUrl = envOrPropOrElse("LLM_API_URL", "http://192.168.68.62:1234")
+    val llmTimeout = envOrPropOrElse("LLM_TIMEOUT_MS", "5000").toInt
+    val llmMaxRetries = envOrPropOrElse("LLM_MAX_RETRIES", "2").toInt
 
-    val wsHost = sys.env.getOrElse("WS_HOST", "0.0.0.0")
-    val wsPort = sys.env.getOrElse("WS_PORT", "8080").toInt
-    val wsPath = sys.env.getOrElse("WS_PATH", "/ws")
+    val wsHost = envOrPropOrElse("WS_HOST", "0.0.0.0")
+    val wsPort = envOrPropOrElse("WS_PORT", "8080").toInt
+    val wsPath = envOrPropOrElse("WS_PATH", "/ws")
 
     AppConfig(
       discord = DiscordConfig(
@@ -160,6 +169,36 @@ object Main extends LazyLogging {
     sys.addShutdownHook {
       logger.info("Shutdown hook triggered")
       system.terminate()
+    }
+  }
+
+  /**
+   * Load .env file from project root into system properties.
+   * Walks up from the working directory to find .env.
+   */
+  private def loadDotEnv(): Unit = {
+    val candidates = Stream.iterate(Paths.get("").toAbsolutePath)(_.getParent)
+      .takeWhile(_ != null)
+      .map(_.resolve(".env"))
+
+    candidates.find(p => Files.exists(p)).foreach { envPath =>
+      logger.info(s"Loading .env from ${envPath}")
+      val lines = Files.readAllLines(envPath)
+      lines.forEach { line =>
+        val trimmed = line.trim
+        if (trimmed.nonEmpty && !trimmed.startsWith("#")) {
+          val eqIdx = trimmed.indexOf('=')
+          if (eqIdx > 0) {
+            val key = trimmed.substring(0, eqIdx).trim
+            val value = trimmed.substring(eqIdx + 1).trim
+              .stripPrefix("\"").stripSuffix("\"")
+              .stripPrefix("'").stripSuffix("'")
+            if (sys.env.get(key).isEmpty) {
+              System.setProperty(key, value)
+            }
+          }
+        }
+      }
     }
   }
 }

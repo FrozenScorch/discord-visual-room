@@ -32,12 +32,10 @@
     });
 
     particles = new THREE.Points(geometry, material);
-    // @ts-expect-error @types/three version mismatch with threlte
     scene.add(particles);
 
     return () => {
       if (particles) {
-        // @ts-expect-error @types/three version mismatch with threlte
         scene.remove(particles);
         particles.geometry.dispose();
         (particles.material as THREE.Material).dispose();

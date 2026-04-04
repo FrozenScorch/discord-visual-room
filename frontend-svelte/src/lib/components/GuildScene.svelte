@@ -64,7 +64,6 @@
       near={0.1}
       far={500}
       makeDefault
-      // @ts-expect-error threlte extends PerspectiveCamera with extra props
       oncreate={(camera: THREE.PerspectiveCamera) => {
         camera.lookAt(...cameraTarget);
       }}
@@ -86,7 +85,6 @@
       position={[8, 12, 6]}
       intensity={0.8}
       castShadow
-      // @ts-expect-error threlte extends DirectionalLight with extra props
       oncreate={(light: THREE.DirectionalLight) => {
         light.shadow.mapSize.width = 2048;
         light.shadow.mapSize.height = 2048;
