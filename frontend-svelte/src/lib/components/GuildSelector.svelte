@@ -9,7 +9,7 @@
   }
 
   let {
-    apiUrl = 'http://localhost:9050',
+    apiUrl = `http://${window.location.hostname}:9050`,
     onSelect,
   }: {
     apiUrl?: string;
