@@ -11,6 +11,7 @@ import discord4j.core.`object`.presence.Activity
 import discord4j.core.event.domain.VoiceStateUpdateEvent
 import discord4j.core.event.domain.lifecycle.ReadyEvent
 import discord4j.core.event.domain.PresenceUpdateEvent
+import discord4j.core.event.domain.message.MessageCreateEvent
 
 import java.util.concurrent.atomic.AtomicReference
 import scala.collection.immutable
@@ -117,6 +118,12 @@ object DiscordBot extends LazyLogging {
       eventDispatcher.on(classOf[PresenceUpdateEvent]).subscribe { event =>
         val currentGuild = activeGuildId.get()
         if (currentGuild != null) handlePresenceUpdate(event, currentGuild, guildManager)
+      }
+
+      // Handle message creates for text channel activity tracking
+      eventDispatcher.on(classOf[MessageCreateEvent]).subscribe { event =>
+        val currentGuild = activeGuildId.get()
+        if (currentGuild != null) handleMessageCreate(event, currentGuild, guildManager)
       }
 
       // Initial sync if GUILD_ID was provided
@@ -294,6 +301,57 @@ object DiscordBot extends LazyLogging {
   }
 
   /**
+   * Handle message create events - track text channel activity
+   */
+  private def handleMessageCreate(
+    event: MessageCreateEvent,
+    guildId: String,
+    guildManager: ActorRef[GuildManager.Command]
+  ): Unit = {
+    Try {
+      val message = event.getMessage
+      val channel = message.getChannel.block()
+      if (channel == null) return
+
+      // Only handle GUILD_TEXT channels
+      if (channel.getType != discord4j.core.`object`.entity.channel.Channel.Type.GUILD_TEXT) return
+
+      val eventGuildId = message.getGuildId.toScala.map(_.asString()).getOrElse("")
+      if (eventGuildId != guildId) return
+
+      // Ignore bot messages
+      val authorOpt = message.getAuthor.toScala
+      if (authorOpt.isEmpty || authorOpt.get.isBot) return
+
+      val author = authorOpt.get
+      val userId = author.getId.asString()
+      val username = author.getUsername
+      val displayName = username // User doesn't have getDisplayName, use username
+      val avatarUrl = author.getAvatarUrl
+      val channelId = channel.getId.asString()
+
+      // Extract activity from author's presence
+      val activity = Try {
+        val guildSnowflake = Snowflake.of(guildId)
+        val member = author.asMember(guildSnowflake).block()
+        if (member != null) extractActivity(member) else None
+      }.toOption.flatten
+
+      guildManager ! GuildManager.UserTextActivity(
+        userId = userId,
+        username = username,
+        displayName = displayName,
+        avatarUrl = avatarUrl,
+        channelId = channelId,
+        activity = activity
+      )
+    }.recover {
+      case ex: Exception =>
+        logger.error("Error handling message create", ex)
+    }
+  }
+
+  /**
    * Handle presence update events (activity changes)
    */
   private def handlePresenceUpdate(
@@ -336,6 +394,11 @@ object DiscordBot extends LazyLogging {
 
       channelIdOpt.foreach { channelId =>
         guildManager ! GuildManager.UserActivityChanged(userId, channelId, activity)
+      }
+
+      // Also forward presence updates for text channels (even if user not in voice)
+      if (channelIdOpt.isEmpty && activity.isDefined) {
+        guildManager ! GuildManager.UserTextPresenceUpdate(userId, activity)
       }
 
     }.recover {

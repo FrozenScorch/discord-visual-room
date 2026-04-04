@@ -41,9 +41,11 @@
   }
 
   onMount(() => {
-    labelTexture = createTextTexture(room.name, accentColor, 48);
+    const isText = room.channelType === 'TEXT';
+    const displayName = isText ? `# ${room.name}` : room.name;
+    labelTexture = createTextTexture(displayName, accentColor, 48);
     if (room.users.length > 0) {
-      countTexture = createTextTexture(`${room.users.length} online`, '#9999bb', 32);
+      countTexture = createTextTexture(`${room.users.length} ${isText ? 'active' : 'online'}`, '#9999bb', 32);
     }
   });
 
@@ -52,8 +54,12 @@
     const name = room.name;
     const count = room.users.length;
     const color = accentColor;
-    labelTexture = createTextTexture(name, color, 48);
-    countTexture = count > 0 ? createTextTexture(`${count} online`, '#9999bb', 32) : null;
+    const isText = room.channelType === 'TEXT';
+    const displayName = isText ? `# ${name}` : name;
+    labelTexture = createTextTexture(displayName, color, 48);
+    countTexture = count > 0
+      ? createTextTexture(`${count} ${isText ? 'active' : 'online'}`, '#9999bb', 32)
+      : null;
   });
 </script>
 

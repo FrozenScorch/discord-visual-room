@@ -39,6 +39,24 @@ object GuildManager extends LazyLogging {
 
   final case class UserSpeakingChanged(userId: String, channelId: String, isSpeaking: Boolean) extends Command
 
+  // Text channel events (from DiscordBot)
+  final case class UserTextActivity(
+    userId: String,
+    username: String,
+    displayName: String,
+    avatarUrl: String,
+    channelId: String,
+    activity: Option[UserActivity]
+  ) extends Command
+
+  final case class UserTextPresenceUpdate(
+    userId: String,
+    activity: Option[UserActivity]
+  ) extends Command
+
+  // Internal
+  private[actors] final case object PruneInactiveTextUsers extends Command
+
   // Guild metadata updates
   final case class GuildDiscovered(
     guildInfo: GuildInfo,
@@ -78,6 +96,12 @@ class GuildManager private (
   private var cachedUsers: Map[String, immutable.Seq[UserNode]] = Map.empty
   private var cachedFurniture: Map[String, immutable.Seq[FurnitureNode]] = Map.empty
 
+  // Text channel tracking: channelId -> Map[userId -> (UserNode, lastSeenEpochMs)]
+  private var textChannelUsers: Map[String, Map[String, (UserNode, Long)]] = Map.empty
+  private var textChannelIds: Set[String] = Set.empty
+  private var pruneTimerScheduled = false
+  private val TEXT_CHANNEL_TIMEOUT_MS = 5 * 60 * 1000L // 5 minutes
+
   override def onMessage(msg: Command): Behavior[Command] = {
     msg match {
       case Initialize(guildId, replyTo) =>
@@ -104,6 +128,18 @@ class GuildManager private (
 
       case UserSpeakingChanged(userId, channelId, isSpeaking) =>
         handleUserSpeakingChanged(userId, channelId, isSpeaking)
+        this
+
+      case UserTextActivity(userId, username, displayName, avatarUrl, channelId, activity) =>
+        handleUserTextActivity(userId, username, displayName, avatarUrl, channelId, activity)
+        this
+
+      case UserTextPresenceUpdate(userId, activity) =>
+        handleUserTextPresenceUpdate(userId, activity)
+        this
+
+      case PruneInactiveTextUsers =>
+        handlePruneInactiveTextUsers()
         this
 
       case RoomStateUpdate(channelId, users, furniture) =>
@@ -134,7 +170,10 @@ class GuildManager private (
     guildInfo = Some(info)
 
     // Store channel names for later use in RoomData
-    channelNames = voiceChannels.map { case (id, name, _) => id -> name }.toMap
+    channelNames = (voiceChannels ++ txtChannels).map { case (id, name, _) => id -> name }.toMap
+
+    // Store text channel IDs
+    textChannelIds = txtChannels.map { case (id, _, _) => id }.toSet
 
     // Build text channel metas
     textChannelMetas = txtChannels.map { case (id, name, _) =>
@@ -144,6 +183,9 @@ class GuildManager private (
     // Compute room positions using grid layout strategy
     roomPositions = RoomLayoutStrategy.computePositions(
       voiceChannels.map { case (id, _, pos) => id -> pos }
+    ) ++ RoomLayoutStrategy.computeTextChannelPositions(
+      txtChannels.map { case (id, _, pos) => id -> pos },
+      voiceChannels.size
     )
 
     // Create RoomActor for each voice channel
@@ -238,10 +280,10 @@ class GuildManager private (
   private def buildGuildScene(): GuildSceneGraph = {
     val info = guildInfo.getOrElse(GuildInfo("unknown", "Unknown Server"))
 
-    val rooms = roomPositions.map { case (channelId, pos) =>
+    // Voice channel rooms (existing logic)
+    val voiceRooms = roomPositions.collect { case (channelId, pos) if roomActors.contains(channelId) =>
       val name = channelNames.getOrElse(channelId, channelId)
       val users = cachedUsers.getOrElse(channelId, immutable.Seq.empty).map { u =>
-        // Offset user positions by room position (room-local -> world-space)
         u.copy(position = Vector3D(u.position.x + pos.x, u.position.y, u.position.z + pos.z))
       }
       val furniture = cachedFurniture.getOrElse(channelId, immutable.Seq.empty).map { f =>
@@ -250,6 +292,122 @@ class GuildManager private (
       RoomData(channelId, name, ChannelType.Voice, pos, users, furniture)
     }.toSeq
 
-    GuildSceneGraph.create(info, rooms, textChannelMetas)
+    // Text channel rooms (users who recently sent messages)
+    val textRooms = textChannelUsers.flatMap { case (channelId, activeUsers) =>
+      roomPositions.get(channelId).map { pos =>
+        val name = channelNames.getOrElse(channelId, channelId)
+        val usersList = activeUsers.values.toSeq.sortBy(_._2).reverse.map { case (userNode, _) =>
+          userNode
+        }
+        // Position users in circular layout
+        val users = usersList.zipWithIndex.map { case (userNode, index) =>
+          val n = usersList.size
+          val angle = (2.0 * math.Pi * index) / n
+          val radius = math.max(3.0, n * 0.8)
+          userNode.copy(
+            position = Vector3D(pos.x + math.cos(angle) * radius, 0.65, pos.z + math.sin(angle) * radius)
+          )
+        }
+        val furniture = generateTextChannelFurniture(channelId, users, pos)
+        RoomData(channelId, name, ChannelType.Text, pos, users, furniture)
+      }
+    }.toSeq
+
+    // Empty text channels stay in roomsMeta
+    val activeTextIds = textChannelUsers.keySet
+    val emptyTextMetas = textChannelMetas.filterNot(m => activeTextIds.contains(m.id))
+
+    GuildSceneGraph.create(info, voiceRooms ++ textRooms, emptyTextMetas)
+  }
+
+  // ── Text channel handlers ──────────────────────────────────────────────
+
+  private def handleUserTextActivity(
+    userId: String, username: String, displayName: String,
+    avatarUrl: String, channelId: String, activity: Option[UserActivity]
+  ): Unit = {
+    if (!textChannelIds.contains(channelId)) return
+
+    val userNode = UserNode(
+      id = userId, username = username, displayName = displayName,
+      avatar = avatarUrl, position = Vector3D(0, 0, 0), rotation = Vector3D(0, 0, 0),
+      activity = activity, isSpeaking = false
+    )
+
+    val now = System.currentTimeMillis()
+    val channelUsers = textChannelUsers.getOrElse(channelId, Map.empty)
+    textChannelUsers = textChannelUsers.updated(channelId, channelUsers.updated(userId, (userNode, now)))
+
+    ensurePruneTimer()
+    broadcastGuildScene()
+  }
+
+  private def handleUserTextPresenceUpdate(userId: String, activity: Option[UserActivity]): Unit = {
+    var changed = false
+    val updated = scala.collection.mutable.Map.empty[String, Map[String, (UserNode, Long)]]
+    textChannelUsers.foreach { case (chId, users) =>
+      users.get(userId) match {
+        case Some((userNode, ts)) =>
+          changed = true
+          updated(chId) = users.updated(userId, (userNode.copy(activity = activity), ts))
+        case None =>
+          updated(chId) = users
+      }
+    }
+    textChannelUsers = updated.toMap
+    if (changed) broadcastGuildScene()
+  }
+
+  private def handlePruneInactiveTextUsers(): Unit = {
+    pruneTimerScheduled = false
+    val now = System.currentTimeMillis()
+    var changed = false
+
+    val pruned = textChannelUsers.map { case (chId, users) =>
+      val active = users.filter { case (_, (_, lastSeen)) =>
+        now - lastSeen < TEXT_CHANNEL_TIMEOUT_MS
+      }
+      if (active.size != users.size) changed = true
+      (chId, active)
+    }.filter { case (_, users) => users.nonEmpty }
+
+    textChannelUsers = pruned.toMap
+
+    if (changed) {
+      broadcastGuildScene()
+    }
+    // Reschedule if there are still text channel users
+    if (textChannelUsers.values.exists(_.nonEmpty)) {
+      ensurePruneTimer()
+    }
+  }
+
+  private def ensurePruneTimer(): Unit = {
+    if (!pruneTimerScheduled) {
+      pruneTimerScheduled = true
+      import akka.actor.typed.scaladsl.AskPattern._
+      import scala.concurrent.duration._
+      context.scheduleOnce(1.minute, context.self, PruneInactiveTextUsers)
+    }
+  }
+
+  private def generateTextChannelFurniture(
+    channelId: String,
+    users: immutable.Seq[UserNode],
+    roomPos: RoomPosition
+  ): immutable.Seq[FurnitureNode] = {
+    users.zipWithIndex.map { case (user, index) =>
+      val n = users.size
+      val angle = (2.0 * math.Pi * index) / n
+      val radius = math.max(3.0, n * 0.8)
+      FurnitureNode(
+        id = s"tf-$channelId-$index",
+        furnitureType = FurnitureType.CouchSingle,
+        position = Vector3D(roomPos.x + math.cos(angle) * radius, 0, roomPos.z + math.sin(angle) * radius),
+        rotation = Vector3D(0, -angle + math.Pi, 0),
+        assignedUserId = Some(user.id),
+        capacity = 1
+      )
+    }
   }
 }

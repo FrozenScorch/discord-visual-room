@@ -11,8 +11,13 @@
 
   let { room, active = false, onclick }: { room: RoomData; active?: boolean; onclick?: (e: MouseEvent) => void } = $props();
 
+  let isTextChannel = $derived(room.channelType === 'TEXT');
+
   // Derive a unique room color from the room name hash
   let roomColor = $derived.by(() => {
+    if (isTextChannel) {
+      return new THREE.Color('#1a1a30'); // Darker blue floor for text channels
+    }
     let hash = 0;
     for (let i = 0; i < room.name.length; i++) {
       hash = room.name.charCodeAt(i) + ((hash << 5) - hash);
@@ -22,6 +27,9 @@
   });
 
   let accentHex = $derived.by(() => {
+    if (isTextChannel) {
+      return '#5577cc'; // Blue accent for text channels
+    }
     let hash = 0;
     for (let i = 0; i < room.name.length; i++) {
       hash = room.name.charCodeAt(i) + ((hash << 5) - hash);
