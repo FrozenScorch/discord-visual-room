@@ -36,6 +36,9 @@ services:
     # All service URLs use localhost:PORT not Docker service names
     network_mode: host
 
+    env_file:
+      - ../.env
+
     environment:
       # LLM Server Configuration (Windows PC)
       - LLM_API_URL=${LLM_API_URL:-http://192.168.68.62:1234}
