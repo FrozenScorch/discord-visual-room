@@ -60,13 +60,25 @@ object Main extends LazyLogging {
     logger.info("=" * 60)
 
     // Wait indefinitely until shutdown signal
-    // In Docker, SIGTERM triggers the shutdown hook.
-    // In local dev, ENTER on stdin triggers shutdown.
+    // In Docker (no stdin), StdIn.readLine() returns null immediately.
+    // Block on a CountDownLatch so SIGTERM can trigger graceful shutdown.
+    import java.util.concurrent.CountDownLatch
+    val latch = new CountDownLatch(1)
+    sys.addShutdownHook { latch.countDown() }
     try {
-      StdIn.readLine()
+      val line = StdIn.readLine()
+      if (line != null) {
+        // User pressed ENTER in local dev
+        logger.info("Received shutdown signal from stdin")
+      } else {
+        // Docker: no stdin, block until SIGTERM
+        logger.info("No stdin detected (running in container), waiting for SIGTERM...")
+        latch.await()
+      }
     } catch {
-      case _: Exception => // EOF in Docker (no stdin) — block until SIGTERM
-        Thread.sleep(Long.MaxValue)
+      case _: InterruptedException => // SIGTERM interrupt
+      case _: Exception =>
+        latch.await()
     }
 
     logger.info("Shutting down...")
