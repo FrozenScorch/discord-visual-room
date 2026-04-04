@@ -61,3 +61,11 @@ scalacOptions ++= Seq(
 
 // Fork JVM for better logging
 fork := true
+
+// Assembly settings for fat JAR
+assembly / assemblyMergeStrategy := {
+  case PathList("META-INF", "io.netty.versions.properties") => MergeStrategy.first
+  case PathList("META-INF", xs @ _*) => MergeStrategy.discard
+  case "reference.conf" => MergeStrategy.concat
+  case x => MergeStrategy.first
+}
