@@ -56,13 +56,13 @@ object DiscordBot extends LazyLogging {
 
       guilds.asScala.toSeq.map { g =>
         val icon = Option(g.getIconUrl(discord4j.rest.util.Image.Format.PNG)).flatMap(_.toScala)
-        val memberCount = g.getMembers.count().block().intValue()
+        val memberCount = Option(g.getMemberCount).map(_.intValue()).getOrElse(0)
         (g.getId.asString(), g.getName, icon, memberCount)
       }.sortBy(_._2) // sort by name
-    }.getOrElse {
-      logger.error("Failed to list guilds")
+    }.recover { case e =>
+      logger.error(s"Failed to list guilds: ${e.getMessage}", e)
       Seq.empty
-    }
+    }.get
   }
 
   /**
