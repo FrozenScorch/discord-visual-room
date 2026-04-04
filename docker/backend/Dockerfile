@@ -25,7 +25,7 @@
 # - Creates assembly JAR with all dependencies
 # - Caches dependencies for faster rebuilds
 # ========================================================================
-FROM hseeberger/scala-sbt:jdk17-graalvm-ce-21.0_1.9.7 AS builder
+FROM sbtscala/scala-sbt:eclipse-temurin-21.0.8_9_1.12.8_2.13.18 AS builder
 
 # Set working directory
 WORKDIR /build
