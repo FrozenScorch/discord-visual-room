@@ -9,8 +9,8 @@
   import ConnectionStatus from '$lib/components/ConnectionStatus.svelte';
   import type { GuildSceneGraph, ViewMode, CameraTarget } from '$lib/types';
 
-  let apiUrl = 'http://localhost:9000';
-  let wsUrl = 'ws://localhost:9000/ws';
+  let apiUrl = 'http://localhost:9050';
+  let wsUrl = 'ws://localhost:9050/ws';
   let guildSelected = $state(false);
   let currentScene: GuildSceneGraph = $state({
     version: '2.0.0',

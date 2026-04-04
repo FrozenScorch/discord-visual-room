@@ -15,7 +15,7 @@ import { sceneGraph } from './stores/sceneGraph';
 import type { SceneUpdateMessage, ConnectionState, WSMessage, GuildSceneGraph } from './types';
 
 let ws: WebSocket | null = null;
-let wsUrl: string = 'ws://localhost:9000/ws';
+let wsUrl: string = 'ws://localhost:9050/ws';
 let reconnectAttempts: number = 0;
 const maxReconnectAttempts: number = 10;
 const reconnectDelay: number = 1000;
