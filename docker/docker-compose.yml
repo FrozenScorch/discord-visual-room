@@ -49,8 +49,8 @@ services:
       - WS_PORT=${WS_PORT:-9050}
       - WS_HOST=${WS_HOST:-0.0.0.0}
 
-      # Discord Bot Configuration
-      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      # Discord Bot Configuration (loaded from ../.env)
+      # DISCORD_BOT_TOKEN is read via env_file, not set here
 
       # Room Configuration
       - ROOM_ID=${ROOM_ID:-default-room}
