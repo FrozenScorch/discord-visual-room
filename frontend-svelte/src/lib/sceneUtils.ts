@@ -211,8 +211,9 @@ export function createSpeakingIndicator(): THREE.Mesh {
 
 /**
  * Load an image texture from a URL with CORS proxy fallback.
- * For Discord CDN URLs, falls back to images.weserv.nl proxy and then a
- * size-parameterised variant before giving up.
+ * For Discord CDN URLs, tries images.weserv.nl proxy first (direct CDN
+ * requests are blocked by CORS from browsers), then falls back to other
+ * strategies.
  */
 export async function loadTexture(url: string): Promise<THREE.Texture | null> {
   const tryLoad = (loadUrl: string): Promise<THREE.Texture | null> => {
@@ -233,26 +234,36 @@ export async function loadTexture(url: string): Promise<THREE.Texture | null> {
     });
   };
 
-  // Try direct URL first
+  if (!url || url === '' || url === 'null') return null;
+
+  // For Discord CDN URLs, use proxy FIRST (direct loading always fails from browsers)
+  if (url.includes('cdn.discordapp.com') || url.includes('discord.com')) {
+    // Ensure a small size for performance
+    const baseUrl = url.split('?')[0];
+    const proxyUrl = `https://images.weserv.nl/?url=${encodeURIComponent(baseUrl)}&w=128&h=128`;
+    let texture = await tryLoad(proxyUrl);
+    if (texture) return texture;
+
+    // Fallback: proxy with full URL including original query params
+    const proxyFullUrl = `https://images.weserv.nl/?url=${encodeURIComponent(url)}&w=128&h=128`;
+    texture = await tryLoad(proxyFullUrl);
+    if (texture) return texture;
+
+    // Last resort: try direct (may work if same-origin proxy is set up)
+    texture = await tryLoad(url);
+    if (texture) return texture;
+
+    return null;
+  }
+
+  // For non-Discord URLs, try direct first
   let texture = await tryLoad(url);
   if (texture) return texture;
 
-  // For Discord CDN URLs, try images.weserv.nl CORS proxy
-  if (url.includes('cdn.discordapp.com')) {
-    const proxyUrl = `https://images.weserv.nl/?url=${encodeURIComponent(url)}`;
-    texture = await tryLoad(proxyUrl);
-    if (texture) return texture;
-
-    // Also try with a size parameter
-    const sizedUrl = url.includes('?') ? `${url}&size=128` : `${url}?size=128`;
-    texture = await tryLoad(sizedUrl);
-    if (texture) return texture;
-
-    // Proxy + size
-    const proxySizedUrl = `https://images.weserv.nl/?url=${encodeURIComponent(sizedUrl)}`;
-    texture = await tryLoad(proxySizedUrl);
-    if (texture) return texture;
-  }
+  // Generic proxy fallback
+  const proxyUrl = `https://images.weserv.nl/?url=${encodeURIComponent(url)}&w=128&h=128`;
+  texture = await tryLoad(proxyUrl);
+  if (texture) return texture;
 
   return null;
 }
