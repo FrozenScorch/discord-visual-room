@@ -201,22 +201,22 @@ object DiscordBot extends LazyLogging {
       logger.info(s"Found ${voiceChannels.size} voice channels, ${textChannels.size} text channels")
 
       // Build GuildInfo
-      val members = guild.getMembers.collectList().block()
-      val onlineCount = if (members != null) {
-        members.asScala.count { m =>
-          val presence = m.getPresence.block()
-          presence != null && !presence.getStatus.equals(discord4j.core.`object`.presence.Status.OFFLINE)
-        }
-      } else 0
+      val onlineCount = Try {
+        val members = guild.getMembers.collectList().block()
+        if (members != null) {
+          members.asScala.count { m =>
+            val presence = m.getPresence.block()
+            presence != null && !presence.getStatus.equals(discord4j.core.`object`.presence.Status.OFFLINE)
+          }
+        } else 0
+      }.getOrElse(0)
 
-      val roles = guild.getRoles.collectList().block()
-      val guildRoles: immutable.Seq[GuildRole] = if (roles != null) {
-        roles.asScala.toSeq.map { r =>
-          val colorInt = r.getColor.getRGB
-          val position = r.getPosition.block()
-          GuildRole(r.getId.asString(), r.getName, colorInt, if (position != null) position else 0)
-        }
-      } else Seq.empty
+      val roles = Try(guild.getRoles.collectList().block()).toOption.map(_.asScala.toSeq).getOrElse(Seq.empty)
+      val guildRoles: immutable.Seq[GuildRole] = roles.map { r =>
+        val colorInt = r.getColor.getRGB
+        val position = r.getPosition.block()
+        GuildRole(r.getId.asString(), r.getName, colorInt, if (position != null) position else 0)
+      }
 
       val guildInfo = GuildInfo(
         id = guildSnowflake,
