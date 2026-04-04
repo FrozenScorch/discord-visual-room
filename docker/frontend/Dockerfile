@@ -87,9 +87,9 @@ ENV VITE_API_URL=${VITE_API_URL}
 # ========================================================================
 RUN npm run build && \
     # Verify build output
-    ls -lah dist/ && \
+    ls -lah build/ && \
     # Calculate file checksums for verification
-    find dist -type f -exec sha256sum {} \; > /build/dist.sha256
+    find build -type f -exec sha256sum {} \; > /build/dist.sha256
 
 # ========================================================================
 # Stage 2: Runtime
@@ -125,7 +125,7 @@ RUN addgroup -S appgroup && \
     chown -R appuser:appgroup /var/cache/nginx /var/log/nginx /run
 
 # Copy built files from builder stage
-COPY --from=builder --chown=appuser:appgroup /build/dist /usr/share/nginx/html
+COPY --from=builder --chown=appuser:appgroup /build/build /usr/share/nginx/html
 
 # Copy nginx configuration
 COPY docker/frontend/nginx.conf /etc/nginx/nginx.conf
