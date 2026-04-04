@@ -115,7 +115,7 @@ services:
 
     # Health check for the frontend HTTP service
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001"]
+      test: ["CMD", "curl", "-f", "http://localhost:8050"]
       interval: 30s
       timeout: 10s
       retries: 3
