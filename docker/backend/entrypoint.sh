@@ -38,8 +38,8 @@ print_config() {
     echo "Configuration:"
     echo "----------------"
     echo "WS_HOST:       ${WS_HOST:-0.0.0.0}"
-    echo "WS_PORT:       ${WS_PORT:-8080}"
-    echo "LLM_SERVER_URL: ${LLM_SERVER_URL:-http://192.168.68.62:1234}"
+    echo "WS_PORT:       ${WS_PORT:-9050}"
+    echo "LLM_API_URL:   ${LLM_API_URL:-http://192.168.68.62:1234}"
     echo "LOG_LEVEL:     ${LOG_LEVEL:-INFO}"
     echo "JVM_OPTS:      ${JVM_OPTS}"
     echo "----------------"
@@ -133,17 +133,15 @@ main() {
     # ========================================================================
 
     exec java ${JVM_OPTIONS} \
-        -Dws.host="${WS_HOST:-0.0.0.0}" \
-        -Dws.port="${WS_PORT:-8080}" \
-        -Dllm.server.url="${LLM_SERVER_URL:-http://192.168.68.62:1234}" \
-        -Dlog.level="${LOG_LEVEL:-INFO}" \
-        -Ddiscord.bot.token="${DISCORD_BOT_TOKEN}" \
-        -Droom.id="${ROOM_ID:-default-room}" \
-        -Droom.name="${ROOM_NAME:-Discord Visual Room}" \
-        -Droom.maxUsers="${ROOM_MAX_USERS:-10}" \
-        -Droom.width="${ROOM_WIDTH:-10}" \
-        -Droom.height="${ROOM_HEIGHT:-3}" \
-        -Droom.depth="${ROOM_DEPTH:-10}" \
+        -DWS_HOST="${WS_HOST:-0.0.0.0}" \
+        -DWS_PORT="${WS_PORT:-9050}" \
+        -DLLM_API_URL="${LLM_API_URL:-http://192.168.68.62:1234}" \
+        -DLOG_LEVEL="${LOG_LEVEL:-INFO}" \
+        -DDISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN}" \
+        -DROOM_MAX_USERS="${ROOM_MAX_USERS:-10}" \
+        -DROOM_DIMENSIONS_WIDTH="${ROOM_WIDTH:-10}" \
+        -DROOM_DIMENSIONS_HEIGHT="${ROOM_HEIGHT:-3}" \
+        -DROOM_DIMENSIONS_DEPTH="${ROOM_DEPTH:-10}" \
         -jar /app/app.jar
 }
 

@@ -40,12 +40,12 @@ services:
 
     environment:
       # LLM Server Configuration (Windows PC)
-      - LLM_SERVER_URL=${LLM_SERVER_URL:-http://192.168.68.62:1234}
+      - LLM_API_URL=${LLM_API_URL:-http://192.168.68.62:1234}
       - LLM_TIMEOUT=${LLM_TIMEOUT:-30000}
       - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-3}
 
       # WebSocket Configuration
-      - WS_PORT=${WS_PORT:-8080}
+      - WS_PORT=${WS_PORT:-9050}
       - WS_HOST=${WS_HOST:-0.0.0.0}
 
       # Discord Bot Configuration
@@ -67,7 +67,7 @@ services:
 
     # Health check for the backend WebSocket service
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9050/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -104,7 +104,7 @@ services:
       cache_from:
         - discord-visual-room-frontend:latest
       args:
-        - VITE_API_URL=${VITE_API_URL:-ws://localhost:8080}
+        - VITE_API_URL=${VITE_API_URL:-ws://localhost:9050}
     image: discord-visual-room-frontend:latest
     container_name: discord-visual-room-frontend
     restart: unless-stopped
@@ -115,11 +115,11 @@ services:
 
     environment:
       # Backend WebSocket URL (from host perspective)
-      - VITE_API_URL=${VITE_API_URL:-ws://localhost:8080}
+      - VITE_API_URL=${VITE_API_URL:-ws://localhost:9050}
 
     # Health check for the frontend HTTP service
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001"]
       interval: 30s
       timeout: 10s
       retries: 3

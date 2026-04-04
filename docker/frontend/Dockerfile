@@ -50,7 +50,7 @@ RUN apk add --no-cache \
 
 # Copy package files first for better Docker layer caching
 # These change less frequently than source code
-COPY frontend/package*.json ./
+COPY frontend-svelte/package*.json ./
 
 # Check if this is part of a workspace (monorepo)
 # If so, we need to handle shared dependencies
@@ -66,13 +66,16 @@ RUN if grep -q '"workspace:' package.json; then \
 RUN npm ci --prefer-offline || pnpm install --frozen-lockfile
 
 # Copy source code
-COPY frontend/tsconfig.json ./
-COPY frontend/vite.config.ts ./
-COPY frontend/src ./src
+COPY frontend-svelte/tsconfig.json ./
+COPY frontend-svelte/vite.config.ts ./
+COPY frontend-svelte/svelte.config.js ./
+COPY frontend-svelte/package.json ./
+COPY frontend-svelte/src ./src
+COPY frontend-svelte/static ./static
 
 # Build argument for backend WebSocket URL
 # This gets baked into the static files during build
-ARG VITE_API_URL=ws://localhost:8080
+ARG VITE_API_URL=ws://localhost:9050
 ENV VITE_API_URL=${VITE_API_URL}
 
 # ========================================================================
@@ -141,7 +144,7 @@ EXPOSE 8000
 # Simple HTTP GET request to verify nginx is serving content
 # ========================================================================
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/ || exit 1
+    CMD curl -f http://localhost:8001/ || exit 1
 
 # ========================================================================
 # nginx Runtime Configuration

@@ -118,7 +118,7 @@ EXPOSE 8080
 # The health check runs every 30 seconds, with a 10 second timeout
 # ========================================================================
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:9050/health || exit 1
 
 # ========================================================================
 # JVM Tuning for Containerized Environments
@@ -133,7 +133,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 ENV JVM_OPTS="-Xmx512m -Xms128m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+UseG1GC -Djava.security.egd=file:/dev/./urandom"
 
 # Application configuration defaults
-ENV WS_PORT=8080
+ENV WS_PORT=9050
 ENV WS_HOST=0.0.0.0
 ENV LOG_LEVEL=INFO
 
