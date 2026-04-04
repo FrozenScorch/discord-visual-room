@@ -28,8 +28,6 @@ services:
     build:
       context: ..
       dockerfile: docker/backend/Dockerfile
-      cache_from:
-        - discord-visual-room-backend:latest
     image: discord-visual-room-backend:latest
     container_name: discord-visual-room-backend
     restart: unless-stopped
@@ -101,8 +99,6 @@ services:
     build:
       context: ..
       dockerfile: docker/frontend/Dockerfile
-      cache_from:
-        - discord-visual-room-frontend:latest
       args:
         - VITE_API_URL=${VITE_API_URL:-ws://localhost:9050}
     image: discord-visual-room-frontend:latest

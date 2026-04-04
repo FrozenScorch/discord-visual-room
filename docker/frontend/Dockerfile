@@ -63,7 +63,7 @@ RUN if grep -q '"workspace:' package.json; then \
 
 # Install dependencies
 # --prefer-offline: Use cached packages when available
-RUN npm ci --prefer-offline || pnpm install --frozen-lockfile
+RUN npm install
 
 # Copy source code
 COPY frontend-svelte/tsconfig.json ./
