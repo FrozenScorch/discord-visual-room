@@ -56,11 +56,18 @@ object Main extends LazyLogging {
     } else {
       logger.info("No GUILD_ID set — guild selection available at /api/guilds")
     }
-    logger.info("Press ENTER to stop...")
+    logger.info("Press ENTER to stop (or send SIGTERM)...")
     logger.info("=" * 60)
 
-    // Wait for user input
-    StdIn.readLine()
+    // Wait indefinitely until shutdown signal
+    // In Docker, SIGTERM triggers the shutdown hook.
+    // In local dev, ENTER on stdin triggers shutdown.
+    try {
+      StdIn.readLine()
+    } catch {
+      case _: Exception => // EOF in Docker (no stdin) — block until SIGTERM
+        Thread.sleep(Long.MaxValue)
+    }
 
     logger.info("Shutting down...")
     system.terminate()
@@ -89,7 +96,7 @@ object Main extends LazyLogging {
     val llmMaxRetries = envOrPropOrElse("LLM_MAX_RETRIES", "2").toInt
 
     val wsHost = envOrPropOrElse("WS_HOST", "0.0.0.0")
-    val wsPort = envOrPropOrElse("WS_PORT", "8080").toInt
+    val wsPort = envOrPropOrElse("WS_PORT", "9050").toInt
     val wsPath = envOrPropOrElse("WS_PATH", "/ws")
 
     AppConfig(
