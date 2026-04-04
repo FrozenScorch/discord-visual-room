@@ -108,7 +108,9 @@ object SceneGraphServer extends LazyLogging {
    */
   private def serializeGuildsList(guilds: Seq[(String, String, Option[String], Int)]): String = {
     val items = guilds.map { case (id, name, icon, memberCount) =>
-      s"""{"id":"$id","name":"${name.replace("\"", "\\\"")}","icon":${icon.map(u => s""""$u""""").getOrElse("null")},"memberCount":$memberCount}"""
+      val escapedName = name.replace("\"", "\\\"")
+      val iconStr = icon.map(u => "\"" + u.replace("\"", "\\\"") + "\"").getOrElse("null")
+      s"""{"id":"$id","name":"$escapedName","icon":$iconStr,"memberCount":$memberCount}"""
     }
     s"""{"guilds":[${items.mkString(",")}]}"""
   }
